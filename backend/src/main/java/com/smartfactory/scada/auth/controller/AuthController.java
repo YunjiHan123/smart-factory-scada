@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.smartfactory.scada.auth.dto.LoginRequest;
+import com.smartfactory.scada.auth.dto.LoginResponse;
 import com.smartfactory.scada.auth.dto.SignupRequest;
 import com.smartfactory.scada.auth.dto.SignupResponse;
 import com.smartfactory.scada.auth.service.AuthService;
@@ -25,5 +27,10 @@ public class AuthController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public SignupResponse signup(@Valid @RequestBody SignupRequest request) {
 		return authService.signup(request);
+	}
+
+	@PostMapping("/login")
+	public LoginResponse login(@Valid @RequestBody LoginRequest request) {
+		return authService.login(request);
 	}
 }
