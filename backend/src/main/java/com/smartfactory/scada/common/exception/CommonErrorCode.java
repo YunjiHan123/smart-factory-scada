@@ -9,7 +9,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum CommonErrorCode implements ErrorCode {
 
-	VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "요청 값이 올바르지 않습니다.");
+	VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "\uC694\uCCAD \uAC12\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
 
 	private final HttpStatus status;
 	private final String code;
