@@ -59,6 +59,16 @@ public class JwtTokenProvider {
 		return Long.valueOf(parseClaims(token).getSubject());
 	}
 
+	public Long getUserIdAllowExpired(String token, TokenType expectedTokenType) {
+		Claims claims = parseClaimsAllowExpired(token);
+		TokenType tokenType = getTokenType(claims);
+		if (tokenType != expectedTokenType) {
+			throw new IllegalArgumentException("Unexpected token type.");
+		}
+
+		return Long.valueOf(claims.getSubject());
+	}
+
 	private String createToken(Long userId, TokenType tokenType, long expirationMs) {
 		Instant now = Instant.now();
 		Instant expiresAt = now.plusMillis(expirationMs);
@@ -78,6 +88,14 @@ public class JwtTokenProvider {
 			.build()
 			.parseSignedClaims(token)
 			.getPayload();
+	}
+
+	private Claims parseClaimsAllowExpired(String token) {
+		try {
+			return parseClaims(token);
+		} catch (ExpiredJwtException exception) {
+			return exception.getClaims();
+		}
 	}
 
 	private TokenType getTokenType(Claims claims) {

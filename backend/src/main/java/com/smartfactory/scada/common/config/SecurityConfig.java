@@ -30,7 +30,7 @@ public class SecurityConfig {
 			.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 			.exceptionHandling(this::configureExceptionHandling)
 			.authorizeHttpRequests(auth -> auth
-				.requestMatchers("/api/auth/signup", "/api/auth/login", "/error").permitAll()
+				.requestMatchers("/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/error").permitAll()
 				.anyRequest().authenticated()
 			)
 			.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

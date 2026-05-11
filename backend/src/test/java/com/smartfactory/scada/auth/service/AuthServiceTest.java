@@ -19,8 +19,11 @@ import com.smartfactory.scada.auth.dto.LoginRequest;
 import com.smartfactory.scada.auth.dto.LoginResponse;
 import com.smartfactory.scada.auth.dto.SignupRequest;
 import com.smartfactory.scada.auth.dto.SignupResponse;
+import com.smartfactory.scada.auth.dto.TokenPair;
 import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.jwt.JwtTokenProvider;
+import com.smartfactory.scada.auth.jwt.TokenStatus;
+import com.smartfactory.scada.auth.jwt.TokenType;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.mapper.UserMapper;
@@ -146,5 +149,83 @@ class AuthServiceTest {
 			);
 
 		then(refreshTokenService).shouldHaveNoInteractions();
+	}
+
+	@Test
+	void refreshReturnsNewTokenPairWhenTokensAreValid() {
+		given(jwtTokenProvider.getUserIdAllowExpired("access-token", TokenType.ACCESS)).willReturn(1L);
+		given(jwtTokenProvider.validateToken("refresh-token", TokenType.REFRESH)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("refresh-token")).willReturn(1L);
+		given(refreshTokenService.exists(1L)).willReturn(true);
+		given(refreshTokenService.matches(1L, "refresh-token")).willReturn(true);
+		given(jwtTokenProvider.createAccessToken(1L)).willReturn("new-access-token");
+		given(jwtTokenProvider.createRefreshToken(1L)).willReturn("new-refresh-token");
+
+		TokenPair tokenPair = authService.refresh("access-token", "refresh-token");
+
+		assertThat(tokenPair.accessToken()).isEqualTo("new-access-token");
+		assertThat(tokenPair.refreshToken()).isEqualTo("new-refresh-token");
+		then(refreshTokenService).should().save(1L, "new-refresh-token");
+	}
+
+	@Test
+	void refreshThrowsInvalidTokenWhenAccessTokenIsInvalid() {
+		given(jwtTokenProvider.getUserIdAllowExpired("invalid-access-token", TokenType.ACCESS))
+			.willThrow(new IllegalArgumentException("invalid"));
+
+		assertThatThrownBy(() -> authService.refresh("invalid-access-token", "refresh-token"))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.INVALID_TOKEN)
+			);
+	}
+
+	@Test
+	void refreshThrowsExpiredTokenWhenRefreshTokenIsExpired() {
+		given(jwtTokenProvider.getUserIdAllowExpired("access-token", TokenType.ACCESS)).willReturn(1L);
+		given(jwtTokenProvider.validateToken("expired-refresh-token", TokenType.REFRESH)).willReturn(TokenStatus.EXPIRED);
+
+		assertThatThrownBy(() -> authService.refresh("access-token", "expired-refresh-token"))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.EXPIRED_TOKEN)
+			);
+	}
+
+	@Test
+	void refreshThrowsInvalidTokenWhenTokenUsersAreDifferent() {
+		given(jwtTokenProvider.getUserIdAllowExpired("access-token", TokenType.ACCESS)).willReturn(1L);
+		given(jwtTokenProvider.validateToken("refresh-token", TokenType.REFRESH)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("refresh-token")).willReturn(2L);
+
+		assertThatThrownBy(() -> authService.refresh("access-token", "refresh-token"))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.INVALID_TOKEN)
+			);
+	}
+
+	@Test
+	void refreshThrowsNotFoundWhenSavedRefreshTokenDoesNotExist() {
+		given(jwtTokenProvider.getUserIdAllowExpired("access-token", TokenType.ACCESS)).willReturn(1L);
+		given(jwtTokenProvider.validateToken("refresh-token", TokenType.REFRESH)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("refresh-token")).willReturn(1L);
+		given(refreshTokenService.exists(1L)).willReturn(false);
+
+		assertThatThrownBy(() -> authService.refresh("access-token", "refresh-token"))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.REFRESH_TOKEN_NOT_FOUND)
+			);
+	}
+
+	@Test
+	void refreshThrowsMismatchWhenSavedRefreshTokenDoesNotMatch() {
+		given(jwtTokenProvider.getUserIdAllowExpired("access-token", TokenType.ACCESS)).willReturn(1L);
+		given(jwtTokenProvider.validateToken("refresh-token", TokenType.REFRESH)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("refresh-token")).willReturn(1L);
+		given(refreshTokenService.exists(1L)).willReturn(true);
+		given(refreshTokenService.matches(1L, "refresh-token")).willReturn(false);
+
+		assertThatThrownBy(() -> authService.refresh("access-token", "refresh-token"))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.REFRESH_TOKEN_MISMATCH)
+			);
 	}
 }

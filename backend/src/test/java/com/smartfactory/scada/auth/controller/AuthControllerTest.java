@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -19,6 +20,7 @@ import com.smartfactory.scada.auth.dto.LoginRequest;
 import com.smartfactory.scada.auth.dto.LoginResponse;
 import com.smartfactory.scada.auth.dto.SignupRequest;
 import com.smartfactory.scada.auth.dto.SignupResponse;
+import com.smartfactory.scada.auth.dto.TokenPair;
 import com.smartfactory.scada.auth.filter.JwtAuthenticationFilter;
 import com.smartfactory.scada.auth.security.JwtAuthenticationEntryPoint;
 import com.smartfactory.scada.auth.service.AuthService;
@@ -128,5 +130,34 @@ class AuthControllerTest {
 				.content(objectMapper.writeValueAsString(request)))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
+	@Test
+	void refreshReturnsTokenPair() throws Exception {
+		given(authService.refresh("access-token", "refresh-token"))
+			.willReturn(new TokenPair("new-access-token", "new-refresh-token"));
+
+		mockMvc.perform(post("/api/auth/refresh")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer access-token")
+				.header("X-Refresh-Token", "refresh-token"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.accessToken").value("new-access-token"))
+			.andExpect(jsonPath("$.refreshToken").value("new-refresh-token"));
+	}
+
+	@Test
+	void refreshReturnsUnauthorizedWhenAuthorizationHeaderIsMissing() throws Exception {
+		mockMvc.perform(post("/api/auth/refresh")
+				.header("X-Refresh-Token", "refresh-token"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void refreshReturnsUnauthorizedWhenRefreshTokenHeaderIsMissing() throws Exception {
+		mockMvc.perform(post("/api/auth/refresh")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer access-token"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 	}
 }

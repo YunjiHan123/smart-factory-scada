@@ -1,6 +1,7 @@
 package com.smartfactory.scada.auth.jwt;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
@@ -74,5 +75,23 @@ class JwtTokenProviderTest {
 		Long userId = jwtTokenProvider.getUserId(accessToken);
 
 		assertThat(userId).isEqualTo(1L);
+	}
+
+	@Test
+	void getUserIdAllowExpiredReturnsSubjectForExpiredAccessToken() {
+		JwtTokenProvider expiredTokenProvider = new JwtTokenProvider(SECRET, -1000L, 3600000L);
+		String expiredAccessToken = expiredTokenProvider.createAccessToken(1L);
+
+		Long userId = jwtTokenProvider.getUserIdAllowExpired(expiredAccessToken, TokenType.ACCESS);
+
+		assertThat(userId).isEqualTo(1L);
+	}
+
+	@Test
+	void getUserIdAllowExpiredThrowsWhenTokenTypeIsDifferent() {
+		String refreshToken = jwtTokenProvider.createRefreshToken(1L);
+
+		assertThatThrownBy(() -> jwtTokenProvider.getUserIdAllowExpired(refreshToken, TokenType.ACCESS))
+			.isInstanceOf(IllegalArgumentException.class);
 	}
 }

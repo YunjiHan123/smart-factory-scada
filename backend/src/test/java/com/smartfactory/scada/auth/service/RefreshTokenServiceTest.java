@@ -38,4 +38,47 @@ class RefreshTokenServiceTest {
 		assertThat(valueCaptor.getValue()).hasSize(64);
 		assertThat(ttlCaptor.getValue()).isEqualTo(Duration.ofHours(1));
 	}
+
+	@Test
+	void existsReturnsTrueWhenKeyExists() {
+		RefreshTokenService refreshTokenService = new RefreshTokenService(redisTemplate, 3600000L);
+		given(redisTemplate.hasKey("auth:refresh:1")).willReturn(true);
+
+		boolean exists = refreshTokenService.exists(1L);
+
+		assertThat(exists).isTrue();
+	}
+
+	@Test
+	void matchesReturnsTrueWhenSavedHashMatches() {
+		given(redisTemplate.opsForValue()).willReturn(valueOperations);
+		RefreshTokenService refreshTokenService = new RefreshTokenService(redisTemplate, 3600000L);
+		given(valueOperations.get("auth:refresh:1")).willReturn(refreshTokenService.hash("refresh-token"));
+
+		boolean matches = refreshTokenService.matches(1L, "refresh-token");
+
+		assertThat(matches).isTrue();
+	}
+
+	@Test
+	void matchesReturnsFalseWhenSavedHashDoesNotExist() {
+		given(redisTemplate.opsForValue()).willReturn(valueOperations);
+		RefreshTokenService refreshTokenService = new RefreshTokenService(redisTemplate, 3600000L);
+		given(valueOperations.get("auth:refresh:1")).willReturn(null);
+
+		boolean matches = refreshTokenService.matches(1L, "refresh-token");
+
+		assertThat(matches).isFalse();
+	}
+
+	@Test
+	void matchesReturnsFalseWhenSavedHashIsDifferent() {
+		given(redisTemplate.opsForValue()).willReturn(valueOperations);
+		RefreshTokenService refreshTokenService = new RefreshTokenService(redisTemplate, 3600000L);
+		given(valueOperations.get("auth:refresh:1")).willReturn(refreshTokenService.hash("another-refresh-token"));
+
+		boolean matches = refreshTokenService.matches(1L, "refresh-token");
+
+		assertThat(matches).isFalse();
+	}
 }

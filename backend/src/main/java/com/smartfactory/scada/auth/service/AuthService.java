@@ -8,11 +8,16 @@ import com.smartfactory.scada.auth.dto.LoginRequest;
 import com.smartfactory.scada.auth.dto.LoginResponse;
 import com.smartfactory.scada.auth.dto.SignupRequest;
 import com.smartfactory.scada.auth.dto.SignupResponse;
+import com.smartfactory.scada.auth.dto.TokenPair;
 import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.jwt.JwtTokenProvider;
+import com.smartfactory.scada.auth.jwt.TokenStatus;
+import com.smartfactory.scada.auth.jwt.TokenType;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.mapper.UserMapper;
+
+import io.jsonwebtoken.JwtException;
 
 import lombok.RequiredArgsConstructor;
 
@@ -65,5 +70,50 @@ public class AuthService {
 			accessToken,
 			refreshToken
 		);
+	}
+
+	public TokenPair refresh(String accessToken, String refreshToken) {
+		Long accessUserId = getAccessTokenUserId(accessToken);
+		validateRefreshToken(refreshToken);
+		Long refreshUserId = jwtTokenProvider.getUserId(refreshToken);
+
+		if (!accessUserId.equals(refreshUserId)) {
+			throw new BusinessException(AuthErrorCode.INVALID_TOKEN);
+		}
+
+		if (!refreshTokenService.exists(refreshUserId)) {
+			throw new BusinessException(AuthErrorCode.REFRESH_TOKEN_NOT_FOUND);
+		}
+
+		if (!refreshTokenService.matches(refreshUserId, refreshToken)) {
+			throw new BusinessException(AuthErrorCode.REFRESH_TOKEN_MISMATCH);
+		}
+
+		String newAccessToken = jwtTokenProvider.createAccessToken(refreshUserId);
+		String newRefreshToken = jwtTokenProvider.createRefreshToken(refreshUserId);
+		refreshTokenService.save(refreshUserId, newRefreshToken);
+
+		return new TokenPair(newAccessToken, newRefreshToken);
+	}
+
+	private Long getAccessTokenUserId(String accessToken) {
+		try {
+			return jwtTokenProvider.getUserIdAllowExpired(accessToken, TokenType.ACCESS);
+		} catch (JwtException | IllegalArgumentException exception) {
+			throw new BusinessException(AuthErrorCode.INVALID_TOKEN);
+		}
+	}
+
+	private void validateRefreshToken(String refreshToken) {
+		TokenStatus tokenStatus = jwtTokenProvider.validateToken(refreshToken, TokenType.REFRESH);
+		if (tokenStatus == TokenStatus.VALID) {
+			return;
+		}
+
+		if (tokenStatus == TokenStatus.EXPIRED) {
+			throw new BusinessException(AuthErrorCode.EXPIRED_TOKEN);
+		}
+
+		throw new BusinessException(AuthErrorCode.INVALID_TOKEN);
 	}
 }

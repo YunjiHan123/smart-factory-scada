@@ -30,6 +30,15 @@ public class RefreshTokenService {
 		redisTemplate.opsForValue().set(key(userId), hash(refreshToken), refreshTokenTtl);
 	}
 
+	public boolean exists(Long userId) {
+		return Boolean.TRUE.equals(redisTemplate.hasKey(key(userId)));
+	}
+
+	public boolean matches(Long userId, String refreshToken) {
+		String savedRefreshTokenHash = redisTemplate.opsForValue().get(key(userId));
+		return hash(refreshToken).equals(savedRefreshTokenHash);
+	}
+
 	String key(Long userId) {
 		return KEY_PREFIX + userId;
 	}
