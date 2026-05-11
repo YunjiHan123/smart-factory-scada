@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.user.mapper.UserMapper">
+    <resultMap id="UserResultMap" type="com.smartfactory.scada.user.domain.User">
+        <id property="id" column="id"/>
+        <result property="email" column="email"/>
+        <result property="passwordHash" column="password_hash"/>
+        <result property="nickname" column="nickname"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="findById" resultMap="UserResultMap">
+        SELECT
+            id,
+            email,
+            password_hash,
+            nickname,
+            created_at,
+            updated_at
+        FROM users
+        WHERE id = #{id}
+    </select>
+
+    <select id="findByEmail" resultMap="UserResultMap">
+        SELECT
+            id,
+            email,
+            password_hash,
+            nickname,
+            created_at,
+            updated_at
+        FROM users
+        WHERE email = #{email}
+    </select>
+
+    <select id="existsByEmail" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM users
+            WHERE email = #{email}
+        )
+    </select>
+
+    <insert id="insert" parameterType="com.smartfactory.scada.user.domain.User" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO users (
+            email,
+            password_hash,
+            nickname
+        ) VALUES (
+            #{email},
+            #{passwordHash},
+            #{nickname}
+        )
+    </insert>
+</mapper>
