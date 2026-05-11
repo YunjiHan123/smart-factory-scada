@@ -2,6 +2,7 @@ package com.smartfactory.scada.auth.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,6 +17,7 @@ import com.smartfactory.scada.auth.dto.SignupRequest;
 import com.smartfactory.scada.auth.dto.SignupResponse;
 import com.smartfactory.scada.auth.dto.TokenPair;
 import com.smartfactory.scada.auth.exception.AuthErrorCode;
+import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.auth.service.AuthService;
 import com.smartfactory.scada.common.exception.BusinessException;
 
@@ -54,6 +56,16 @@ public class AuthController {
 		}
 
 		return authService.refresh(accessToken, refreshToken);
+	}
+
+	@PostMapping("/logout")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void logout(@AuthenticationPrincipal AuthenticatedUser authenticatedUser) {
+		if (authenticatedUser == null) {
+			throw new BusinessException(AuthErrorCode.AUTHENTICATION_REQUIRED);
+		}
+
+		authService.logout(authenticatedUser);
 	}
 
 	private String resolveBearerToken(String authorizationHeader) {

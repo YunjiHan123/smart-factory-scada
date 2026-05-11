@@ -81,4 +81,13 @@ class RefreshTokenServiceTest {
 
 		assertThat(matches).isFalse();
 	}
+
+	@Test
+	void deleteRemovesRefreshTokenKey() {
+		RefreshTokenService refreshTokenService = new RefreshTokenService(redisTemplate, 3600000L);
+
+		refreshTokenService.delete(1L);
+
+		then(redisTemplate).should().delete("auth:refresh:1");
+	}
 }

@@ -39,6 +39,10 @@ public class RefreshTokenService {
 		return hash(refreshToken).equals(savedRefreshTokenHash);
 	}
 
+	public void delete(Long userId) {
+		redisTemplate.delete(key(userId));
+	}
+
 	String key(Long userId) {
 		return KEY_PREFIX + userId;
 	}

@@ -24,6 +24,7 @@ import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.jwt.JwtTokenProvider;
 import com.smartfactory.scada.auth.jwt.TokenStatus;
 import com.smartfactory.scada.auth.jwt.TokenType;
+import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.mapper.UserMapper;
@@ -227,5 +228,14 @@ class AuthServiceTest {
 			.isInstanceOfSatisfying(BusinessException.class, exception ->
 				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.REFRESH_TOKEN_MISMATCH)
 			);
+	}
+
+	@Test
+	void logoutDeletesSavedRefreshToken() {
+		AuthenticatedUser authenticatedUser = new AuthenticatedUser(1L, "login@example.com", "tester");
+
+		authService.logout(authenticatedUser);
+
+		then(refreshTokenService).should().delete(1L);
 	}
 }

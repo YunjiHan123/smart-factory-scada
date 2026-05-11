@@ -13,6 +13,7 @@ import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.jwt.JwtTokenProvider;
 import com.smartfactory.scada.auth.jwt.TokenStatus;
 import com.smartfactory.scada.auth.jwt.TokenType;
+import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.mapper.UserMapper;
@@ -94,6 +95,10 @@ public class AuthService {
 		refreshTokenService.save(refreshUserId, newRefreshToken);
 
 		return new TokenPair(newAccessToken, newRefreshToken);
+	}
+
+	public void logout(AuthenticatedUser authenticatedUser) {
+		refreshTokenService.delete(authenticatedUser.userId());
 	}
 
 	private Long getAccessTokenUserId(String accessToken) {
