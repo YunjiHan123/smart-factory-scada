@@ -27,7 +27,7 @@ import lombok.RequiredArgsConstructor;
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
-public class AuthController {
+public class AuthController implements AuthControllerSpec {
 
 	private static final String BEARER_PREFIX = "Bearer ";
 	private static final String REFRESH_TOKEN_HEADER = "X-Refresh-Token";
@@ -36,16 +36,19 @@ public class AuthController {
 
 	@PostMapping("/signup")
 	@ResponseStatus(HttpStatus.CREATED)
+	@Override
 	public SignupResponse signup(@Valid @RequestBody SignupRequest request) {
 		return authService.signup(request);
 	}
 
 	@PostMapping("/login")
+	@Override
 	public LoginResponse login(@Valid @RequestBody LoginRequest request) {
 		return authService.login(request);
 	}
 
 	@PostMapping("/refresh")
+	@Override
 	public TokenPair refresh(
 		@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
 		@RequestHeader(value = REFRESH_TOKEN_HEADER, required = false) String refreshToken
@@ -60,6 +63,7 @@ public class AuthController {
 
 	@PostMapping("/logout")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
+	@Override
 	public void logout(@AuthenticationPrincipal AuthenticatedUser authenticatedUser) {
 		if (authenticatedUser == null) {
 			throw new BusinessException(AuthErrorCode.AUTHENTICATION_REQUIRED);
