@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.energy.mapper.EnergyMapper">
+    <resultMap id="EnergyMeasurementResultMap" type="com.smartfactory.scada.energy.domain.EnergyMeasurement">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="facilityId" column="facility_id"/>
+        <result property="measuredAt" column="measured_at"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+        <result property="peakKw" column="peak_kw"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <resultMap id="EnergySummaryResultMap" type="com.smartfactory.scada.energy.domain.EnergySummary">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="facilityId" column="facility_id"/>
+        <result property="summaryType" column="summary_type"/>
+        <result property="summaryAt" column="summary_at"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+        <result property="peakKw" column="peak_kw"/>
+        <result property="carbonEmission" column="carbon_emission"/>
+    </resultMap>
+
+    <select id="findMeasurements" resultMap="EnergyMeasurementResultMap">
+        SELECT id, plant_id, facility_id, measured_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, created_at
+        FROM energy_measurements
+        <where>
+            <if test="plantId != null">AND plant_id = #{plantId}</if>
+            <if test="facilityId != null">AND facility_id = #{facilityId}</if>
+            <if test="from != null">AND measured_at &gt;= #{from}</if>
+            <if test="to != null">AND measured_at &lt;= #{to}</if>
+        </where>
+        ORDER BY measured_at DESC, id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findSummaries" resultMap="EnergySummaryResultMap">
+        SELECT id, plant_id, facility_id, summary_type, summary_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, carbon_emission
+        FROM energy_summaries
+        <where>
+            <if test="plantId != null">AND plant_id = #{plantId}</if>
+            <choose>
+                <when test="facilityId != null">
+                    AND facility_id = #{facilityId}
+                </when>
+                <otherwise>
+                    AND facility_id IS NULL
+                </otherwise>
+            </choose>
+            <if test="summaryType != null">AND summary_type = #{summaryType}</if>
+            <if test="from != null">AND summary_at &gt;= #{from}</if>
+            <if test="to != null">AND summary_at &lt;= #{to}</if>
+        </where>
+        ORDER BY summary_at ASC, id ASC
+    </select>
+
+    <select id="findLatestPlantSummary" resultMap="EnergySummaryResultMap">
+        SELECT id, plant_id, facility_id, summary_type, summary_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, carbon_emission
+        FROM energy_summaries
+        WHERE plant_id = #{plantId}
+          AND facility_id IS NULL
+        ORDER BY summary_at DESC, id DESC
+        LIMIT 1
+    </select>
+</mapper>
