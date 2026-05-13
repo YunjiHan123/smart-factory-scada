@@ -1,5 +1,7 @@
 USE scada;
 
+-- Demo account password for all seeded users: Password123!
+
 SET @OLD_SQL_SAFE_UPDATES = @@SQL_SAFE_UPDATES;
 SET FOREIGN_KEY_CHECKS = 0;
 SET SQL_SAFE_UPDATES = 0;
