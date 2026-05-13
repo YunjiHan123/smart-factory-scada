@@ -25,8 +25,9 @@ public interface AuthControllerSpec {
 	@Operation(
 		summary = "회원가입",
 		description = """
-			이메일, 비밀번호, 닉네임으로 새 사용자를 등록합니다.<br>
+			이메일, 비밀번호, 이름, 전화번호, 사업장 ID로 새 사용자를 등록합니다.<br>
 			비밀번호는 서버에서 BCrypt 해시로 변환해 저장하고, 응답에는 비밀번호나 passwordHash를 포함하지 않습니다.<br>
+			role은 VIEWER, status는 ACTIVE로 서버에서 기본 저장합니다.<br>
 			이미 가입된 이메일이면 409 상태코드와 함께 아래와 같은 에러 코드가 반환됩니다.
 			```json
 			{
@@ -55,6 +56,7 @@ public interface AuthControllerSpec {
 		description = """
 			이메일과 비밀번호를 검증한 뒤 access token과 refresh token을 발급합니다.<br>
 			Swagger에서 보호 API를 테스트하려면 로그인 응답의 accessToken을 복사한 뒤, 화면 오른쪽 위 Authorize 버튼에 입력해주세요.<br>
+			INACTIVE 또는 LOCKED 상태의 사용자는 로그인할 수 없습니다.<br>
 			로그인 실패 시 이메일 존재 여부를 노출하지 않기 위해 없는 이메일과 틀린 비밀번호를 모두 INVALID_LOGIN으로 응답합니다.
 			```json
 			{
@@ -74,7 +76,8 @@ public interface AuthControllerSpec {
 			)
 		),
 		@ApiResponse(responseCode = "400", description = "요청값 검증 실패", content = @Content),
-		@ApiResponse(responseCode = "401", description = "이메일 또는 비밀번호 불일치", content = @Content)
+		@ApiResponse(responseCode = "401", description = "이메일 또는 비밀번호 불일치", content = @Content),
+		@ApiResponse(responseCode = "403", description = "비활성화 또는 잠긴 사용자", content = @Content)
 	})
 	LoginResponse login(LoginRequest request);
 
@@ -88,7 +91,7 @@ public interface AuthControllerSpec {
 			Authorization: Bearer {accessToken}
 			X-Refresh-Token: {refreshToken}
 			```
-			토큰이 유효하지 않거나 Redis에 저장된 refresh token 해시와 일치하지 않으면 401로 실패합니다.
+			사용자 상태가 ACTIVE가 아니거나, 토큰이 유효하지 않거나, Redis에 저장된 refresh token 해시와 일치하지 않으면 실패합니다.
 			```json
 			{
 			  "code": "REFRESH_TOKEN_MISMATCH",
@@ -106,7 +109,8 @@ public interface AuthControllerSpec {
 				schema = @Schema(implementation = TokenPair.class)
 			)
 		),
-		@ApiResponse(responseCode = "401", description = "토큰 누락, 만료, 불일치 또는 유효하지 않은 토큰", content = @Content)
+		@ApiResponse(responseCode = "401", description = "토큰 누락, 만료, 불일치 또는 유효하지 않은 토큰", content = @Content),
+		@ApiResponse(responseCode = "403", description = "비활성화 또는 잠긴 사용자", content = @Content)
 	})
 	TokenPair refresh(
 		@Parameter(
@@ -136,7 +140,8 @@ public interface AuthControllerSpec {
 	)
 	@ApiResponses({
 		@ApiResponse(responseCode = "204", description = "로그아웃 성공", content = @Content),
-		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content)
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "비활성화 또는 잠긴 사용자", content = @Content)
 	})
 	void logout(@Parameter(hidden = true) AuthenticatedUser authenticatedUser);
 }

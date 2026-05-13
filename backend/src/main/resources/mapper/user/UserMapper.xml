@@ -8,7 +8,13 @@
         <id property="id" column="id"/>
         <result property="email" column="email"/>
         <result property="passwordHash" column="password_hash"/>
-        <result property="nickname" column="nickname"/>
+        <result property="name" column="name"/>
+        <result property="phone" column="phone"/>
+        <result property="role" column="role"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="status" column="status"/>
+        <result property="note" column="note"/>
+        <result property="lastLoginAt" column="last_login_at"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
@@ -18,7 +24,13 @@
             id,
             email,
             password_hash,
-            nickname,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note,
+            last_login_at,
             created_at,
             updated_at
         FROM users
@@ -30,7 +42,13 @@
             id,
             email,
             password_hash,
-            nickname,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note,
+            last_login_at,
             created_at,
             updated_at
         FROM users
@@ -49,11 +67,27 @@
         INSERT INTO users (
             email,
             password_hash,
-            nickname
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note
         ) VALUES (
             #{email},
             #{passwordHash},
-            #{nickname}
+            #{name},
+            #{phone},
+            #{role},
+            #{plantId},
+            #{status},
+            #{note}
         )
     </insert>
+
+    <update id="updateLastLoginAt">
+        UPDATE users
+        SET last_login_at = NOW()
+        WHERE id = #{id}
+    </update>
 </mapper>

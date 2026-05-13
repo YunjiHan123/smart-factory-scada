@@ -17,4 +17,6 @@ public interface UserMapper {
 	boolean existsByEmail(@Param("email") String email);
 
 	void insert(User user);
+
+	void updateLastLoginAt(@Param("id") Long id);
 }

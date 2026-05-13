@@ -16,6 +16,8 @@ import com.smartfactory.scada.auth.jwt.TokenType;
 import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.User;
+import com.smartfactory.scada.user.domain.UserRole;
+import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
 import io.jsonwebtoken.JwtException;
@@ -40,7 +42,11 @@ public class AuthService {
 		User user = User.builder()
 			.email(request.email())
 			.passwordHash(passwordEncoder.encode(request.password()))
-			.nickname(request.nickname())
+			.name(request.name())
+			.phone(request.phone())
+			.role(UserRole.VIEWER)
+			.plantId(request.plantId())
+			.status(UserStatus.ACTIVE)
 			.build();
 
 		userMapper.insert(user);
@@ -48,10 +54,15 @@ public class AuthService {
 		return new SignupResponse(
 			user.getId(),
 			user.getEmail(),
-			user.getNickname()
+			user.getName(),
+			user.getPhone(),
+			user.getRole().name(),
+			user.getPlantId(),
+			user.getStatus().name()
 		);
 	}
 
+	@Transactional
 	public LoginResponse login(LoginRequest request) {
 		User user = userMapper.findByEmail(request.email())
 			.orElseThrow(() -> new BusinessException(AuthErrorCode.INVALID_LOGIN));
@@ -59,15 +70,19 @@ public class AuthService {
 		if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
 			throw new BusinessException(AuthErrorCode.INVALID_LOGIN);
 		}
+		validateActiveUser(user);
 
 		String accessToken = jwtTokenProvider.createAccessToken(user.getId());
 		String refreshToken = jwtTokenProvider.createRefreshToken(user.getId());
 		refreshTokenService.save(user.getId(), refreshToken);
+		userMapper.updateLastLoginAt(user.getId());
 
 		return new LoginResponse(
 			user.getId(),
 			user.getEmail(),
-			user.getNickname(),
+			user.getName(),
+			user.getRole().name(),
+			user.getPlantId(),
 			accessToken,
 			refreshToken
 		);
@@ -81,6 +96,10 @@ public class AuthService {
 		if (!accessUserId.equals(refreshUserId)) {
 			throw new BusinessException(AuthErrorCode.INVALID_TOKEN);
 		}
+
+		User user = userMapper.findById(refreshUserId)
+			.orElseThrow(() -> new BusinessException(AuthErrorCode.INVALID_TOKEN));
+		validateActiveUser(user);
 
 		if (!refreshTokenService.exists(refreshUserId)) {
 			throw new BusinessException(AuthErrorCode.REFRESH_TOKEN_NOT_FOUND);
@@ -99,6 +118,22 @@ public class AuthService {
 
 	public void logout(AuthenticatedUser authenticatedUser) {
 		refreshTokenService.delete(authenticatedUser.userId());
+	}
+
+	private void validateActiveUser(User user) {
+		if (user.getStatus() == UserStatus.ACTIVE) {
+			return;
+		}
+
+		if (user.getStatus() == UserStatus.LOCKED) {
+			throw new BusinessException(AuthErrorCode.USER_LOCKED);
+		}
+
+		if (user.getStatus() == UserStatus.INACTIVE) {
+			throw new BusinessException(AuthErrorCode.USER_INACTIVE);
+		}
+
+		throw new BusinessException(AuthErrorCode.INVALID_TOKEN);
 	}
 
 	private Long getAccessTokenUserId(String accessToken) {

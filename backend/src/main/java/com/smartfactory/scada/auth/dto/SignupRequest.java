@@ -16,8 +16,14 @@ public record SignupRequest(
 	@Size(min = 8, message = "비밀번호는 8자 이상이어야 합니다.")
 	String password,
 
-	@Schema(description = "사용자 닉네임", example = "홍길동")
-	@NotBlank(message = "닉네임은 필수입니다.")
-	String nickname
+	@Schema(description = "사용자 이름", example = "조혜원")
+	@NotBlank(message = "이름은 필수입니다.")
+	String name,
+
+	@Schema(description = "사용자 전화번호", example = "010-0000-0000")
+	String phone,
+
+	@Schema(description = "사용자가 소속된 사업장 ID", example = "1")
+	Long plantId
 ) {
 }
