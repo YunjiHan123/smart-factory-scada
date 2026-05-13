@@ -18,6 +18,7 @@ import com.smartfactory.scada.auth.jwt.TokenType;
 import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.ErrorResponse;
 import com.smartfactory.scada.user.domain.User;
+import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
 import jakarta.servlet.FilterChain;
@@ -74,11 +75,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 			writeError(response, AuthErrorCode.INVALID_TOKEN);
 			return;
 		}
+		if (user.getStatus() != UserStatus.ACTIVE) {
+			writeUserStatusError(response, user.getStatus());
+			return;
+		}
 
 		AuthenticatedUser authenticatedUser = new AuthenticatedUser(
 			user.getId(),
 			user.getEmail(),
-			user.getNickname()
+			user.getName(),
+			user.getPhone(),
+			user.getRole().name(),
+			user.getPlantId(),
+			user.getStatus().name()
 		);
 		UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
 			authenticatedUser,
@@ -103,6 +112,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	private void writeTokenError(HttpServletResponse response, TokenStatus tokenStatus) throws IOException {
 		if (tokenStatus == TokenStatus.EXPIRED) {
 			writeError(response, AuthErrorCode.EXPIRED_TOKEN);
+			return;
+		}
+
+		writeError(response, AuthErrorCode.INVALID_TOKEN);
+	}
+
+	private void writeUserStatusError(HttpServletResponse response, UserStatus userStatus) throws IOException {
+		if (userStatus == UserStatus.LOCKED) {
+			writeError(response, AuthErrorCode.USER_LOCKED);
+			return;
+		}
+
+		if (userStatus == UserStatus.INACTIVE) {
+			writeError(response, AuthErrorCode.USER_INACTIVE);
 			return;
 		}
 
