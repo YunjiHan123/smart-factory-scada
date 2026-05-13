@@ -1,6 +1,8 @@
 USE scada;
 
+SET @OLD_SQL_SAFE_UPDATES = @@SQL_SAFE_UPDATES;
 SET FOREIGN_KEY_CHECKS = 0;
+SET SQL_SAFE_UPDATES = 0;
 
 DELETE FROM chatbot_messages WHERE user_id BETWEEN 1001 AND 1006 OR plant_id BETWEEN 1 AND 6;
 DELETE FROM simulation_results WHERE user_id BETWEEN 1001 AND 1006 OR plant_id BETWEEN 1 AND 6;
@@ -13,6 +15,7 @@ DELETE FROM users WHERE id BETWEEN 1001 AND 1006;
 DELETE FROM plants WHERE id BETWEEN 1 AND 6;
 
 SET FOREIGN_KEY_CHECKS = 1;
+SET SQL_SAFE_UPDATES = @OLD_SQL_SAFE_UPDATES;
 
 INSERT INTO plants (id, name, company_type, address, latitude, longitude) VALUES
     (1, 'Kia Hwaseong AutoLand', 'KIA', '95 Kia-ro, Ujeong-eup, Hwaseong-si, Gyeonggi-do', 37.0215590, 126.7831110),
