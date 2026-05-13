@@ -61,7 +61,9 @@ class AuthControllerTest {
 			.andExpect(jsonPath("$.phone").value(request.phone()))
 			.andExpect(jsonPath("$.role").value("VIEWER"))
 			.andExpect(jsonPath("$.plantId").value(1L))
-			.andExpect(jsonPath("$.status").value("ACTIVE"));
+			.andExpect(jsonPath("$.status").value("ACTIVE"))
+			.andExpect(jsonPath("$.password").doesNotExist())
+			.andExpect(jsonPath("$.passwordHash").doesNotExist());
 	}
 
 	@Test

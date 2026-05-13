@@ -23,9 +23,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 public interface AuthControllerSpec {
 
 	@Operation(
-		summary = "회원가입",
+		summary = "회원가입 / 사용자 등록",
 		description = """
 			이메일, 비밀번호, 이름, 전화번호, 사업장 ID로 새 사용자를 등록합니다.<br>
+			사용자 관리 화면의 사용자 등록도 별도 POST /api/users를 만들지 않고 이 API를 사용합니다.<br>
 			비밀번호는 서버에서 BCrypt 해시로 변환해 저장하고, 응답에는 비밀번호나 passwordHash를 포함하지 않습니다.<br>
 			role은 VIEWER, status는 ACTIVE로 서버에서 기본 저장합니다.<br>
 			이미 가입된 이메일이면 409 상태코드와 함께 아래와 같은 에러 코드가 반환됩니다.
@@ -40,7 +41,7 @@ public interface AuthControllerSpec {
 	@ApiResponses({
 		@ApiResponse(
 			responseCode = "201",
-			description = "회원가입 성공",
+			description = "회원가입 / 사용자 등록 성공",
 			content = @Content(
 				mediaType = MediaType.APPLICATION_JSON_VALUE,
 				schema = @Schema(implementation = SignupResponse.class)
