@@ -49,7 +49,14 @@
         FROM energy_summaries
         <where>
             <if test="plantId != null">AND plant_id = #{plantId}</if>
-            <if test="facilityId != null">AND facility_id = #{facilityId}</if>
+            <choose>
+                <when test="facilityId != null">
+                    AND facility_id = #{facilityId}
+                </when>
+                <otherwise>
+                    AND facility_id IS NULL
+                </otherwise>
+            </choose>
             <if test="summaryType != null">AND summary_type = #{summaryType}</if>
             <if test="from != null">AND summary_at &gt;= #{from}</if>
             <if test="to != null">AND summary_at &lt;= #{to}</if>
