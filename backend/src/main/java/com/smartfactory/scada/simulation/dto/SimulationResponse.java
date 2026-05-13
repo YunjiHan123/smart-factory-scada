@@ -20,8 +20,7 @@ public record SimulationResponse(
 	BigDecimal expectedScore,
 	String expectedGrade,
 	String analysisResult,
-	LocalDateTime createdAt,
-	String key
+	LocalDateTime createdAt
 ) {
 
 	public static SimulationResponse from(SimulationResult result) {
@@ -40,8 +39,7 @@ public record SimulationResponse(
 			result.getExpectedScore(),
 			result.getExpectedGrade(),
 			result.getAnalysisResult(),
-			result.getCreatedAt(),
-			result.getKey()
+			result.getCreatedAt()
 		);
 	}
 }

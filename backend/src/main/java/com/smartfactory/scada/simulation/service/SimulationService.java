@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,7 +54,6 @@ public class SimulationService {
 		result.setExpectedGrade(toGrade(expectedScore));
 		result.setAnalysisResult(buildAnalysis(result));
 		result.setCreatedAt(LocalDateTime.now());
-		result.setKey(UUID.randomUUID().toString());
 
 		simulationMapper.insert(result);
 		return simulationMapper.findById(result.getId())

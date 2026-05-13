@@ -12,8 +12,7 @@ public record ChatbotMessageResponse(
 	String question,
 	String answer,
 	String referencedData,
-	LocalDateTime createdAt,
-	String key
+	LocalDateTime createdAt
 ) {
 
 	public static ChatbotMessageResponse from(ChatbotMessage message) {
@@ -25,8 +24,7 @@ public record ChatbotMessageResponse(
 			message.getQuestion(),
 			message.getAnswer(),
 			message.getReferencedData(),
-			message.getCreatedAt(),
-			message.getKey()
+			message.getCreatedAt()
 		);
 	}
 }

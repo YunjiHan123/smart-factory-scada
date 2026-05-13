@@ -13,7 +13,6 @@
         <result property="answer" column="answer"/>
         <result property="referencedData" column="referenced_data"/>
         <result property="createdAt" column="created_at"/>
-        <result property="key" column="Key"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.smartfactory.scada.chatbot.domain.ChatbotMessage" useGeneratedKeys="true" keyProperty="id">
@@ -23,16 +22,14 @@
             question,
             answer,
             referenced_data,
-            created_at,
-            `Key`
+            created_at
         ) VALUES (
             #{userId},
             #{plantId},
             #{question},
             #{answer},
             CAST(#{referencedData} AS JSON),
-            #{createdAt},
-            #{key}
+            #{createdAt}
         )
     </insert>
 

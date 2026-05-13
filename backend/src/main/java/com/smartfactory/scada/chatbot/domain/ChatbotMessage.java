@@ -17,5 +17,4 @@ public class ChatbotMessage {
 	private String answer;
 	private String referencedData;
 	private LocalDateTime createdAt;
-	private String key;
 }

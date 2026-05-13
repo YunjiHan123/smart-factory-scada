@@ -20,7 +20,6 @@
         <result property="expectedGrade" column="expected_grade"/>
         <result property="analysisResult" column="analysis_result"/>
         <result property="createdAt" column="created_at"/>
-        <result property="key" column="Key"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.smartfactory.scada.simulation.domain.SimulationResult" useGeneratedKeys="true" keyProperty="id">
@@ -37,8 +36,7 @@
             expected_score,
             expected_grade,
             analysis_result,
-            created_at,
-            `Key`
+            created_at
         ) VALUES (
             #{userId},
             #{plantId},
@@ -52,8 +50,7 @@
             #{expectedScore},
             #{expectedGrade},
             #{analysisResult},
-            #{createdAt},
-            #{key}
+            #{createdAt}
         )
     </insert>
 

@@ -2,7 +2,6 @@ package com.smartfactory.scada.chatbot.service;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,7 +45,6 @@ public class ChatbotService {
 		message.setAnswer(buildAnswer(plantId));
 		message.setReferencedData(referencedData);
 		message.setCreatedAt(LocalDateTime.now());
-		message.setKey(UUID.randomUUID().toString());
 
 		chatbotMapper.insert(message);
 		return chatbotMapper.findById(message.getId())

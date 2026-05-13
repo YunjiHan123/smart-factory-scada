@@ -25,5 +25,4 @@ public class SimulationResult {
 	private String expectedGrade;
 	private String analysisResult;
 	private LocalDateTime createdAt;
-	private String key;
 }
