@@ -20,54 +20,54 @@ SET FOREIGN_KEY_CHECKS = 1;
 SET SQL_SAFE_UPDATES = @OLD_SQL_SAFE_UPDATES;
 
 INSERT INTO plants (id, name, company_type, address, latitude, longitude) VALUES
-    (1, 'Kia Hwaseong AutoLand', 'KIA', '95 Kia-ro, Ujeong-eup, Hwaseong-si, Gyeonggi-do', 37.0215590, 126.7831110),
-    (2, 'Kia Gwangmyeong AutoLand', 'KIA', '113 Kia-ro, Gwangmyeong-si, Gyeonggi-do', 37.4302030, 126.8789450),
-    (3, 'Kia Gwangju AutoLand', 'KIA', '277 Hwaun-ro, Seo-gu, Gwangju', 35.1601080, 126.8826180),
-    (4, 'Hyundai Ulsan Plant', 'HYUNDAI', '700 Yeompo-ro, Buk-gu, Ulsan', 35.5383770, 129.3765130),
-    (5, 'Hyundai Asan Plant', 'HYUNDAI', '1077 Hyundai-ro, Inju-myeon, Asan-si, Chungcheongnam-do', 36.8385080, 126.8815930),
-    (6, 'Hyundai Jeonju Plant', 'HYUNDAI', '163 Wanjusandan 5-ro, Bongdong-eup, Wanju-gun, Jeollabuk-do', 35.9565430, 127.1345060);
+    (1, '기아 화성 AutoLand', 'KIA', '경기도 화성시 우정읍 기아자동차로 95', 37.0215590, 126.7831110),
+    (2, '기아 광명 AutoLand', 'KIA', '경기도 광명시 기아로 113', 37.4302030, 126.8789450),
+    (3, '기아 광주 AutoLand', 'KIA', '광주광역시 서구 화운로 277', 35.1601080, 126.8826180),
+    (4, '현대 울산공장', 'HYUNDAI', '울산광역시 북구 염포로 700', 35.5383770, 129.3765130),
+    (5, '현대 아산공장', 'HYUNDAI', '충청남도 아산시 인주면 현대로 1077', 36.8385080, 126.8815930),
+    (6, '현대 전주공장', 'HYUNDAI', '전라북도 완주군 봉동읍 완주산단5로 163', 35.9565430, 127.1345060);
 
 INSERT INTO users (
     id, email, password_hash, name, phone, role, plant_id, status, note, last_login_at
 ) VALUES
-    (1001, 'admin@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Demo Admin', '010-1000-0001', 'ADMIN', NULL, 'ACTIVE', 'Demo administrator account', NOW() - INTERVAL 10 MINUTE),
-    (1002, 'manager.hwaseong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Hwaseong Energy Manager', '010-1000-0002', 'MANAGER', 1, 'ACTIVE', 'Kia Hwaseong plant manager', NOW() - INTERVAL 25 MINUTE),
-    (1003, 'operator.gwangmyeong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Gwangmyeong Operator', '010-1000-0003', 'OPERATOR', 2, 'ACTIVE', 'Kia Gwangmyeong line operator', NOW() - INTERVAL 1 HOUR),
-    (1004, 'viewer.ulsan@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Ulsan Viewer', '010-1000-0004', 'VIEWER', 4, 'ACTIVE', 'Hyundai Ulsan read-only user', NOW() - INTERVAL 2 HOUR),
-    (1005, 'locked@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Locked Demo User', '010-1000-0005', 'VIEWER', 1, 'LOCKED', 'Locked account test user', NULL),
-    (1006, 'inactive@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', 'Inactive Demo User', '010-1000-0006', 'OPERATOR', 3, 'INACTIVE', 'Inactive account test user', NULL);
+    (1001, 'admin@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '통합 관리자', '010-1000-0001', 'ADMIN', NULL, 'ACTIVE', '데모 통합 관리자 계정', NOW() - INTERVAL 10 MINUTE),
+    (1002, 'manager.hwaseong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '화성 에너지 매니저', '010-1000-0002', 'MANAGER', 1, 'ACTIVE', '기아 화성 사업장 담당자', NOW() - INTERVAL 25 MINUTE),
+    (1003, 'operator.gwangmyeong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '광명 설비 운영자', '010-1000-0003', 'OPERATOR', 2, 'ACTIVE', '기아 광명 생산라인 운영 담당자', NOW() - INTERVAL 1 HOUR),
+    (1004, 'viewer.ulsan@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '울산 조회 사용자', '010-1000-0004', 'VIEWER', 4, 'ACTIVE', '현대 울산공장 조회 전용 사용자', NOW() - INTERVAL 2 HOUR),
+    (1005, 'locked@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '잠금 테스트 사용자', '010-1000-0005', 'VIEWER', 1, 'LOCKED', '잠금 계정 테스트 사용자', NULL),
+    (1006, 'inactive@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '비활성 테스트 사용자', '010-1000-0006', 'OPERATOR', 3, 'INACTIVE', '비활성 계정 테스트 사용자', NULL);
 
 INSERT INTO facilities (id, plant_id, name, facility_type, status) VALUES
-    (101, 1, 'Hwaseong Press Line 1', 'PRESS', 'RUNNING'),
-    (102, 1, 'Hwaseong Body Line 2', 'BODY', 'RUNNING'),
-    (103, 1, 'Hwaseong Paint Booth A', 'PAINT', 'WARNING'),
-    (104, 1, 'Hwaseong Assembly Line 3', 'ASSEMBLY', 'RUNNING'),
-    (105, 1, 'Hwaseong HVAC Utility', 'HVAC', 'RUNNING'),
-    (201, 2, 'Gwangmyeong Press Line 1', 'PRESS', 'RUNNING'),
-    (202, 2, 'Gwangmyeong Body Welding Line', 'BODY', 'RUNNING'),
-    (203, 2, 'Gwangmyeong Paint Oven', 'PAINT', 'RUNNING'),
-    (204, 2, 'Gwangmyeong Assembly Line 1', 'ASSEMBLY', 'WARNING'),
-    (205, 2, 'Gwangmyeong Final Inspection', 'INSPECTION', 'RUNNING'),
-    (301, 3, 'Gwangju Press Line 2', 'PRESS', 'RUNNING'),
-    (302, 3, 'Gwangju Body Line 1', 'BODY', 'RUNNING'),
-    (303, 3, 'Gwangju Paint Booth B', 'PAINT', 'RUNNING'),
-    (304, 3, 'Gwangju Assembly Line 2', 'ASSEMBLY', 'RUNNING'),
-    (305, 3, 'Gwangju Utility Center', 'ETC', 'WARNING'),
-    (401, 4, 'Ulsan Press Plant 3', 'PRESS', 'RUNNING'),
-    (402, 4, 'Ulsan Body Line 5', 'BODY', 'WARNING'),
-    (403, 4, 'Ulsan Paint Plant 2', 'PAINT', 'RUNNING'),
-    (404, 4, 'Ulsan Assembly Line 4', 'ASSEMBLY', 'RUNNING'),
-    (405, 4, 'Ulsan Substation', 'ETC', 'STOPPED'),
-    (501, 5, 'Asan Press Line', 'PRESS', 'RUNNING'),
-    (502, 5, 'Asan Body Line', 'BODY', 'RUNNING'),
-    (503, 5, 'Asan Paint Line', 'PAINT', 'RUNNING'),
-    (504, 5, 'Asan Assembly Line', 'ASSEMBLY', 'RUNNING'),
-    (505, 5, 'Asan HVAC Utility', 'HVAC', 'RUNNING'),
-    (601, 6, 'Jeonju Press Line', 'PRESS', 'RUNNING'),
-    (602, 6, 'Jeonju Body Line', 'BODY', 'RUNNING'),
-    (603, 6, 'Jeonju Paint Line', 'PAINT', 'WARNING'),
-    (604, 6, 'Jeonju Assembly Line', 'ASSEMBLY', 'RUNNING'),
-    (605, 6, 'Jeonju Final Inspection', 'INSPECTION', 'RUNNING');
+    (101, 1, '화성 프레스 1라인', 'PRESS', 'RUNNING'),
+    (102, 1, '화성 차체 2라인', 'BODY', 'RUNNING'),
+    (103, 1, '화성 도장 부스 A', 'PAINT', 'WARNING'),
+    (104, 1, '화성 의장 3라인', 'ASSEMBLY', 'RUNNING'),
+    (105, 1, '화성 공조 설비', 'HVAC', 'RUNNING'),
+    (201, 2, '광명 프레스 1라인', 'PRESS', 'RUNNING'),
+    (202, 2, '광명 차체 용접라인', 'BODY', 'RUNNING'),
+    (203, 2, '광명 도장 건조로', 'PAINT', 'RUNNING'),
+    (204, 2, '광명 의장 1라인', 'ASSEMBLY', 'WARNING'),
+    (205, 2, '광명 최종 검사장', 'INSPECTION', 'RUNNING'),
+    (301, 3, '광주 프레스 2라인', 'PRESS', 'RUNNING'),
+    (302, 3, '광주 차체 1라인', 'BODY', 'RUNNING'),
+    (303, 3, '광주 도장 부스 B', 'PAINT', 'RUNNING'),
+    (304, 3, '광주 의장 2라인', 'ASSEMBLY', 'RUNNING'),
+    (305, 3, '광주 유틸리티 센터', 'ETC', 'WARNING'),
+    (401, 4, '울산 프레스 3공장', 'PRESS', 'RUNNING'),
+    (402, 4, '울산 차체 5라인', 'BODY', 'WARNING'),
+    (403, 4, '울산 도장 2공장', 'PAINT', 'RUNNING'),
+    (404, 4, '울산 의장 4라인', 'ASSEMBLY', 'RUNNING'),
+    (405, 4, '울산 변전 설비', 'ETC', 'STOPPED'),
+    (501, 5, '아산 프레스 라인', 'PRESS', 'RUNNING'),
+    (502, 5, '아산 차체 라인', 'BODY', 'RUNNING'),
+    (503, 5, '아산 도장 라인', 'PAINT', 'RUNNING'),
+    (504, 5, '아산 의장 라인', 'ASSEMBLY', 'RUNNING'),
+    (505, 5, '아산 공조 설비', 'HVAC', 'RUNNING'),
+    (601, 6, '전주 프레스 라인', 'PRESS', 'RUNNING'),
+    (602, 6, '전주 차체 라인', 'BODY', 'RUNNING'),
+    (603, 6, '전주 도장 라인', 'PAINT', 'WARNING'),
+    (604, 6, '전주 의장 라인', 'ASSEMBLY', 'RUNNING'),
+    (605, 6, '전주 최종 검사장', 'INSPECTION', 'RUNNING');
 
 INSERT INTO energy_summaries (
     plant_id, facility_id, summary_type, summary_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, carbon_emission
@@ -138,13 +138,13 @@ INSERT INTO esg_scores (
 INSERT INTO alarms (
     plant_id, facility_id, alarm_type, alarm_level, message, value, threshold_value, occurred_at, resolved_at, status
 ) VALUES
-    (1, NULL, 'PEAK', 'WARNING', 'Hwaseong peak power reached 95 percent of the management threshold.', 1425.00, 1500.00, '2026-05-13 14:05:00', NULL, 'OCCURRED'),
-    (1, 103, 'FACILITY', 'WARNING', 'Paint Booth A exhaust fan vibration increased above normal range.', 78.40, 75.00, '2026-05-13 13:42:00', NULL, 'OCCURRED'),
-    (1, 103, 'GAS', 'CRITICAL', 'Paint Booth A hourly gas usage exceeded the critical threshold.', 605.00, 580.00, '2026-05-13 14:00:00', NULL, 'OCCURRED'),
-    (2, 204, 'ELECTRICITY', 'WARNING', 'Gwangmyeong Assembly Line 1 electricity usage is 12 percent above yesterday.', 1320.00, 1200.00, '2026-05-13 11:30:00', NULL, 'OCCURRED'),
-    (4, 405, 'FACILITY', 'CRITICAL', 'Ulsan substation is stopped and requires field inspection.', 0.00, 1.00, '2026-05-13 09:18:00', NULL, 'OCCURRED'),
-    (5, NULL, 'ESG', 'INFO', 'Asan monthly ESG grade remained BBB.', 6.38, 6.00, '2026-05-13 08:00:00', NULL, 'OCCURRED'),
-    (6, 603, 'WATER', 'WARNING', 'Jeonju Paint Line water usage exceeded the threshold.', 18.20, 16.00, '2026-05-12 16:10:00', '2026-05-12 17:05:00', 'RESOLVED');
+    (1, NULL, 'PEAK', 'WARNING', '화성 사업장의 피크 전력이 관리 기준의 95%에 도달했습니다.', 1425.00, 1500.00, '2026-05-13 14:05:00', NULL, 'OCCURRED'),
+    (1, 103, 'FACILITY', 'WARNING', '화성 도장 부스 A의 배기 팬 진동 수치가 정상 범위를 초과했습니다.', 78.40, 75.00, '2026-05-13 13:42:00', NULL, 'OCCURRED'),
+    (1, 103, 'GAS', 'CRITICAL', '화성 도장 부스 A의 시간당 가스 사용량이 임계값을 초과했습니다.', 605.00, 580.00, '2026-05-13 14:00:00', NULL, 'OCCURRED'),
+    (2, 204, 'ELECTRICITY', 'WARNING', '광명 의장 1라인의 전력 사용량이 전일 대비 12% 증가했습니다.', 1320.00, 1200.00, '2026-05-13 11:30:00', NULL, 'OCCURRED'),
+    (4, 405, 'FACILITY', 'CRITICAL', '울산 변전 설비가 정지 상태입니다. 현장 점검이 필요합니다.', 0.00, 1.00, '2026-05-13 09:18:00', NULL, 'OCCURRED'),
+    (5, NULL, 'ESG', 'INFO', '아산공장의 월간 ESG 등급이 BBB로 유지되었습니다.', 6.38, 6.00, '2026-05-13 08:00:00', NULL, 'OCCURRED'),
+    (6, 603, 'WATER', 'WARNING', '전주 도장 라인의 용수 사용량이 기준치를 초과했습니다.', 18.20, 16.00, '2026-05-12 16:10:00', '2026-05-12 17:05:00', 'RESOLVED');
 
 INSERT INTO simulation_results (
     id, user_id, plant_id, base_score, base_grade, electricity_reduction_rate, gas_reduction_rate,
@@ -152,13 +152,13 @@ INSERT INTO simulation_results (
     analysis_result, created_at
 ) VALUES
     (1, 1002, 1, 8.48, 'AA', 5.00, 3.00, 4.00, 6.00, 10.00, 9.32, 'AAA',
-     'Expected ESG grade improves to AAA when electricity, gas, water, and peak reductions are combined with additional solar generation.',
+     '전력, 가스, 용수, 피크 전력을 함께 절감하고 태양광 발전량을 늘리면 예상 ESG 등급이 AAA로 개선됩니다.',
      '2026-05-13 14:20:00');
 
 INSERT INTO chatbot_messages (
     id, user_id, plant_id, question, answer, referenced_data, created_at
 ) VALUES
-    (1, 1002, 1, 'What is today peak power status for Hwaseong?',
-     'The latest peak power is 1425kW, about 95 percent of the 1500kW threshold. Paint Booth A gas usage also needs attention.',
+    (1, 1002, 1, '화성 사업장의 오늘 피크 전력 상태를 알려줘.',
+     '최근 피크 전력은 1425kW로 기준 1500kW의 약 95%입니다. 화성 도장 부스 A의 가스 사용량도 함께 확인이 필요합니다.',
      JSON_OBJECT('plantId', 1, 'peakKw', 1425.00, 'thresholdKw', 1500.00, 'alarmCount', 3),
      '2026-05-13 14:25:00');
