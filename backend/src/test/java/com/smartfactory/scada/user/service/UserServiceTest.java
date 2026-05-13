@@ -2,13 +2,18 @@ package com.smartfactory.scada.user.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -19,6 +24,8 @@ import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.domain.UserRole;
 import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.dto.UserDetailResponse;
+import com.smartfactory.scada.user.dto.UserListRequest;
+import com.smartfactory.scada.user.dto.UserListResponse;
 import com.smartfactory.scada.user.exception.UserErrorCode;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
@@ -30,6 +37,92 @@ class UserServiceTest {
 
 	@InjectMocks
 	private UserService userService;
+
+	@Test
+	void getUsersReturnsPagedUsersWhenRequesterIsAdmin() {
+		given(userMapper.countUsers(any(UserListRequest.class))).willReturn(21L);
+		given(userMapper.findUsers(any(UserListRequest.class))).willReturn(List.of(targetUser()));
+
+		UserListResponse response = userService.getUsers(
+			authenticatedUser(UserRole.ADMIN),
+			UserListRequest.of(1, 10, " operator ", UserRole.OPERATOR, UserStatus.ACTIVE, 1L)
+		);
+
+		assertThat(response.page()).isEqualTo(1);
+		assertThat(response.size()).isEqualTo(10);
+		assertThat(response.totalCount()).isEqualTo(21L);
+		assertThat(response.totalPages()).isEqualTo(3);
+		assertThat(response.items()).hasSize(1);
+		assertThat(response.items().get(0).userId()).isEqualTo(2L);
+		assertThat(response.items().get(0).email()).isEqualTo("operator@example.com");
+		assertThat(response.items().get(0).role()).isEqualTo("OPERATOR");
+
+		ArgumentCaptor<UserListRequest> requestCaptor = ArgumentCaptor.forClass(UserListRequest.class);
+		then(userMapper).should().countUsers(requestCaptor.capture());
+		UserListRequest request = requestCaptor.getValue();
+		assertThat(request.page()).isEqualTo(1);
+		assertThat(request.size()).isEqualTo(10);
+		assertThat(request.offset()).isEqualTo(10);
+		assertThat(request.keyword()).isEqualTo("operator");
+		assertThat(request.role()).isEqualTo(UserRole.OPERATOR);
+		assertThat(request.status()).isEqualTo(UserStatus.ACTIVE);
+		assertThat(request.plantId()).isEqualTo(1L);
+	}
+
+	@Test
+	void getUsersReturnsPagedUsersWhenRequesterIsManager() {
+		given(userMapper.countUsers(any(UserListRequest.class))).willReturn(0L);
+		given(userMapper.findUsers(any(UserListRequest.class))).willReturn(List.of());
+
+		UserListResponse response = userService.getUsers(
+			authenticatedUser(UserRole.MANAGER),
+			UserListRequest.of(null, null, null, null, null, null)
+		);
+
+		assertThat(response.page()).isZero();
+		assertThat(response.size()).isEqualTo(20);
+		assertThat(response.totalCount()).isZero();
+		assertThat(response.totalPages()).isZero();
+		assertThat(response.items()).isEmpty();
+	}
+
+	@Test
+	void getUsersThrowsAccessDeniedWhenRequesterIsViewer() {
+		assertThatThrownBy(() -> userService.getUsers(
+			authenticatedUser(UserRole.VIEWER),
+			UserListRequest.of(0, 20, null, null, null, null)
+		))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
+			);
+
+		then(userMapper).should(never()).countUsers(any());
+		then(userMapper).should(never()).findUsers(any());
+	}
+
+	@Test
+	void getUsersThrowsAccessDeniedWhenRequesterIsOperator() {
+		assertThatThrownBy(() -> userService.getUsers(
+			authenticatedUser(UserRole.OPERATOR),
+			UserListRequest.of(0, 20, null, null, null, null)
+		))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
+			);
+
+		then(userMapper).should(never()).countUsers(any());
+		then(userMapper).should(never()).findUsers(any());
+	}
+
+	@Test
+	void userListResponseDoesNotExposePasswordHashOrNote() {
+		assertThat(UserListResponse.class.getRecordComponents())
+			.extracting("name")
+			.doesNotContain("passwordHash", "note");
+		assertThat(com.smartfactory.scada.user.dto.UserListItemResponse.class.getRecordComponents())
+			.extracting("name")
+			.doesNotContain("passwordHash", "note");
+	}
 
 	@Test
 	void getUserDetailReturnsUserWhenRequesterIsAdmin() {

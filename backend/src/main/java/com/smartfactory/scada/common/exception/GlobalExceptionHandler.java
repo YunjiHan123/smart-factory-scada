@@ -4,6 +4,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -18,6 +19,13 @@ public class GlobalExceptionHandler {
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	public ResponseEntity<ErrorResponse> handleMethodArgumentNotValidException() {
+		return ResponseEntity
+			.status(CommonErrorCode.VALIDATION_ERROR.getStatus())
+			.body(ErrorResponse.from(CommonErrorCode.VALIDATION_ERROR));
+	}
+
+	@ExceptionHandler(MethodArgumentTypeMismatchException.class)
+	public ResponseEntity<ErrorResponse> handleMethodArgumentTypeMismatchException() {
 		return ResponseEntity
 			.status(CommonErrorCode.VALIDATION_ERROR.getStatus())
 			.body(ErrorResponse.from(CommonErrorCode.VALIDATION_ERROR));

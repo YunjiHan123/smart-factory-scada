@@ -1,14 +1,18 @@
 package com.smartfactory.scada.user.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -23,11 +27,12 @@ import com.smartfactory.scada.auth.jwt.TokenType;
 import com.smartfactory.scada.auth.security.JwtAuthenticationEntryPoint;
 import com.smartfactory.scada.common.config.SecurityConfig;
 import com.smartfactory.scada.common.exception.GlobalExceptionHandler;
-import com.smartfactory.scada.user.service.UserService;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.domain.UserRole;
 import com.smartfactory.scada.user.domain.UserStatus;
+import com.smartfactory.scada.user.dto.UserListRequest;
 import com.smartfactory.scada.user.mapper.UserMapper;
+import com.smartfactory.scada.user.service.UserService;
 
 @WebMvcTest(UserController.class)
 @Import({
@@ -160,6 +165,77 @@ class UserControllerTest {
 				.header(HttpHeaders.AUTHORIZATION, "Bearer access-token"))
 			.andExpect(status().isUnauthorized())
 			.andExpect(jsonPath("$.code").value("INVALID_TOKEN"));
+	}
+
+	@Test
+	void listReturnsUnauthorizedWhenTokenIsMissing() throws Exception {
+		mockMvc.perform(get("/api/users"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void listReturnsUsersWhenRequesterIsAdmin() throws Exception {
+		given(jwtTokenProvider.validateToken("admin-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("admin-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.ADMIN)));
+		given(userMapper.countUsers(any(UserListRequest.class))).willReturn(1L);
+		given(userMapper.findUsers(any(UserListRequest.class))).willReturn(List.of(user(2L, UserRole.OPERATOR)));
+
+		mockMvc.perform(get("/api/users")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
+				.param("page", "1")
+				.param("size", "10")
+				.param("keyword", "operator")
+				.param("role", "OPERATOR")
+				.param("status", "ACTIVE")
+				.param("plantId", "1"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.page").value(1))
+			.andExpect(jsonPath("$.size").value(10))
+			.andExpect(jsonPath("$.totalCount").value(1))
+			.andExpect(jsonPath("$.totalPages").value(1))
+			.andExpect(jsonPath("$.items[0].userId").value(2L))
+			.andExpect(jsonPath("$.items[0].email").value("user2@example.com"))
+			.andExpect(jsonPath("$.items[0].role").value("OPERATOR"))
+			.andExpect(jsonPath("$.items[0].passwordHash").doesNotExist())
+			.andExpect(jsonPath("$.items[0].note").doesNotExist());
+
+		ArgumentCaptor<UserListRequest> requestCaptor = ArgumentCaptor.forClass(UserListRequest.class);
+		then(userMapper).should().countUsers(requestCaptor.capture());
+		UserListRequest request = requestCaptor.getValue();
+		org.assertj.core.api.Assertions.assertThat(request.page()).isEqualTo(1);
+		org.assertj.core.api.Assertions.assertThat(request.size()).isEqualTo(10);
+		org.assertj.core.api.Assertions.assertThat(request.offset()).isEqualTo(10);
+		org.assertj.core.api.Assertions.assertThat(request.keyword()).isEqualTo("operator");
+		org.assertj.core.api.Assertions.assertThat(request.role()).isEqualTo(UserRole.OPERATOR);
+		org.assertj.core.api.Assertions.assertThat(request.status()).isEqualTo(UserStatus.ACTIVE);
+		org.assertj.core.api.Assertions.assertThat(request.plantId()).isEqualTo(1L);
+	}
+
+	@Test
+	void listReturnsForbiddenWhenRequesterIsViewer() throws Exception {
+		given(jwtTokenProvider.validateToken("viewer-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("viewer-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.VIEWER)));
+
+		mockMvc.perform(get("/api/users")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer viewer-token"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("USER_ACCESS_DENIED"));
+	}
+
+	@Test
+	void listReturnsBadRequestWhenEnumQueryIsInvalid() throws Exception {
+		given(jwtTokenProvider.validateToken("admin-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("admin-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.ADMIN)));
+
+		mockMvc.perform(get("/api/users")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
+				.param("role", "UNKNOWN"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 	}
 
 	@Test

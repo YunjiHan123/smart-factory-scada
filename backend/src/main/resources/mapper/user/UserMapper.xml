@@ -63,6 +63,50 @@
         )
     </select>
 
+    <sql id="UserListWhere">
+        <where>
+            <if test="request.keyword != null and request.keyword != ''">
+                AND (
+                    email LIKE CONCAT('%', #{request.keyword}, '%')
+                    OR name LIKE CONCAT('%', #{request.keyword}, '%')
+                    OR phone LIKE CONCAT('%', #{request.keyword}, '%')
+                )
+            </if>
+            <if test="request.role != null">
+                AND role = #{request.role}
+            </if>
+            <if test="request.status != null">
+                AND status = #{request.status}
+            </if>
+            <if test="request.plantId != null">
+                AND plant_id = #{request.plantId}
+            </if>
+        </where>
+    </sql>
+
+    <select id="findUsers" resultMap="UserResultMap">
+        SELECT
+            id,
+            email,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            last_login_at,
+            created_at
+        FROM users
+        <include refid="UserListWhere"/>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{request.size} OFFSET #{request.offset}
+    </select>
+
+    <select id="countUsers" resultType="long">
+        SELECT COUNT(*)
+        FROM users
+        <include refid="UserListWhere"/>
+    </select>
+
     <insert id="insert" parameterType="com.smartfactory.scada.user.domain.User" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO users (
             email,

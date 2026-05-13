@@ -8,6 +8,9 @@ import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.user.domain.UserRole;
 import com.smartfactory.scada.user.dto.UserDetailResponse;
+import com.smartfactory.scada.user.dto.UserListItemResponse;
+import com.smartfactory.scada.user.dto.UserListRequest;
+import com.smartfactory.scada.user.dto.UserListResponse;
 import com.smartfactory.scada.user.exception.UserErrorCode;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
@@ -18,6 +21,22 @@ import lombok.RequiredArgsConstructor;
 public class UserService {
 
 	private final UserMapper userMapper;
+
+	@Transactional(readOnly = true)
+	public UserListResponse getUsers(AuthenticatedUser authenticatedUser, UserListRequest request) {
+		if (authenticatedUser == null) {
+			throw new BusinessException(AuthErrorCode.AUTHENTICATION_REQUIRED);
+		}
+		validateManagePermission(authenticatedUser);
+
+		long totalCount = userMapper.countUsers(request);
+		var items = userMapper.findUsers(request)
+			.stream()
+			.map(UserListItemResponse::from)
+			.toList();
+
+		return UserListResponse.of(items, request, totalCount);
+	}
 
 	@Transactional(readOnly = true)
 	public UserDetailResponse getUserDetail(AuthenticatedUser authenticatedUser, Long userId) {
