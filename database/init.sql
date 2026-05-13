@@ -20,3 +20,13 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO users (email, password_hash, nickname)
+VALUES (
+    'test@scada.com',
+    '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W',
+    'test-user'
+)
+ON DUPLICATE KEY UPDATE
+    password_hash = VALUES(password_hash),
+    nickname = VALUES(nickname);
