@@ -13,10 +13,12 @@ import org.springframework.web.bind.annotation.RestController;
 import com.smartfactory.scada.esg.dto.EsgScoreResponse;
 import com.smartfactory.scada.esg.service.EsgService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/esg")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class EsgController {
 

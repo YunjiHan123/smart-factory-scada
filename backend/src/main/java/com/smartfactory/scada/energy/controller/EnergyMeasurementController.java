@@ -19,11 +19,13 @@ import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.service.EnergyService;
 import com.smartfactory.scada.energy.service.EnergyMeasurementRedisService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/energy")
+@SecurityRequirement(name = "bearerAuth")
 public class EnergyMeasurementController {
 
 	private final EnergyMeasurementRedisService energyMeasurementRedisService;

@@ -10,10 +10,12 @@ import org.springframework.web.bind.annotation.RestController;
 import com.smartfactory.scada.facility.dto.FacilityResponse;
 import com.smartfactory.scada.facility.service.FacilityService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class FacilityController {
 

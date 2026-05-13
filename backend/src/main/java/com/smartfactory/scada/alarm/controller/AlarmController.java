@@ -14,10 +14,12 @@ import com.smartfactory.scada.alarm.domain.AlarmStatus;
 import com.smartfactory.scada.alarm.dto.AlarmResponse;
 import com.smartfactory.scada.alarm.service.AlarmService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/alarms")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class AlarmController {
 

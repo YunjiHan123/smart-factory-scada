@@ -19,10 +19,12 @@ import com.smartfactory.scada.chatbot.dto.ChatbotMessageRequest;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.service.ChatbotService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/chatbot/messages")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class ChatbotController {
 

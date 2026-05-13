@@ -19,10 +19,12 @@ import com.smartfactory.scada.simulation.dto.SimulationRequest;
 import com.smartfactory.scada.simulation.dto.SimulationResponse;
 import com.smartfactory.scada.simulation.service.SimulationService;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/simulations")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class SimulationController {
 
