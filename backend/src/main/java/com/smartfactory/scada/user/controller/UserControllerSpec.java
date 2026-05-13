@@ -17,9 +17,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 @Tag(name = "사용자 API", description = "현재 로그인한 사용자 정보와 사용자 관리 API")
+@SecurityRequirement(name = "bearerAuth")
 public interface UserControllerSpec {
 
 	@Operation(
@@ -50,6 +52,7 @@ public interface UserControllerSpec {
 			사용자 관리 화면에서 사용자 목록을 페이지 단위로 조회합니다.<br>
 			ADMIN 또는 MANAGER 권한을 가진 사용자만 호출할 수 있습니다.<br>
 			keyword는 email, name, phone에 부분 검색으로 적용됩니다.<br>
+			page는 0부터 시작하고, size는 기본 20개 / 최대 100개로 제한됩니다.<br>
 			기본 정렬은 최근 등록순입니다. 정확히는 createdAt DESC, id DESC 순서입니다.
 			"""
 	)
@@ -94,6 +97,7 @@ public interface UserControllerSpec {
 		description = """
 			사용자 관리 화면에서 특정 사용자의 관리 정보를 부분 수정합니다.<br>
 			요청 body에 보낸 필드만 수정하고, 빠진 필드는 기존 값을 유지합니다.<br>
+			null로 보낸 필드도 v1에서는 기존 값을 유지하며, 필드를 비우는 기능은 제공하지 않습니다.<br>
 			수정 가능 필드는 name, phone, role, plantId, status, note입니다.<br>
 			MANAGER는 ADMIN 사용자를 수정할 수 없고, 다른 사용자를 ADMIN으로 승격할 수도 없습니다.
 			"""

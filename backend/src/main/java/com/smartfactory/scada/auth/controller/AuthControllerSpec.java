@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 @Tag(name = "인증 API", description = "회원가입, 로그인, 토큰 재발급, 로그아웃 API")
@@ -86,6 +87,7 @@ public interface AuthControllerSpec {
 		summary = "토큰 재발급",
 		description = """
 			access token이 만료됐거나 만료 직전일 때 새 access token과 refresh token을 발급받는 API입니다.<br>
+			이 API는 Swagger Authorize 버튼의 전역 인증을 사용하지 않고, 아래 두 헤더를 직접 입력해서 테스트합니다.<br>
 			Authorization 헤더에는 Bearer 접두사가 붙은 access token을 넣고, X-Refresh-Token 헤더에는 refresh token을 넣어주세요.<br>
 			재발급에 성공하면 응답으로 받은 새 accessToken과 refreshToken을 기존 토큰 대신 사용해야 합니다.
 			```http
@@ -135,10 +137,12 @@ public interface AuthControllerSpec {
 		summary = "로그아웃",
 		description = """
 			현재 로그인한 사용자의 Redis refresh token을 삭제합니다.<br>
+			Swagger에서 테스트하려면 로그인 응답의 accessToken을 Authorize 버튼에 입력한 뒤 호출합니다.<br>
 			로그아웃 후에는 기존 refresh token으로 토큰 재발급을 할 수 없습니다.<br>
 			다만 access token은 stateless JWT라서 서버가 즉시 삭제하지 않으며, 남은 만료 시간 동안 이론상 유효할 수 있습니다.
 			"""
 	)
+	@SecurityRequirement(name = "bearerAuth")
 	@ApiResponses({
 		@ApiResponse(responseCode = "204", description = "로그아웃 성공", content = @Content),
 		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
