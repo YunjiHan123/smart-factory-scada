@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.simulation.mapper.SimulationMapper">
+    <resultMap id="SimulationResultMap" type="com.smartfactory.scada.simulation.domain.SimulationResult">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="baseScore" column="base_score"/>
+        <result property="baseGrade" column="base_grade"/>
+        <result property="electricityReductionRate" column="electricity_reduction_rate"/>
+        <result property="gasReductionRate" column="gas_reduction_rate"/>
+        <result property="waterReductionRate" column="water_reduction_rate"/>
+        <result property="peakReductionRate" column="peak_reduction_rate"/>
+        <result property="solarIncreaseRate" column="solar_increase_rate"/>
+        <result property="expectedScore" column="expected_score"/>
+        <result property="expectedGrade" column="expected_grade"/>
+        <result property="analysisResult" column="analysis_result"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="key" column="Key"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.smartfactory.scada.simulation.domain.SimulationResult" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO simulation_results (
+            user_id,
+            plant_id,
+            base_score,
+            base_grade,
+            electricity_reduction_rate,
+            gas_reduction_rate,
+            water_reduction_rate,
+            peak_reduction_rate,
+            solar_increase_rate,
+            expected_score,
+            expected_grade,
+            analysis_result,
+            created_at,
+            `Key`
+        ) VALUES (
+            #{userId},
+            #{plantId},
+            #{baseScore},
+            #{baseGrade},
+            #{electricityReductionRate},
+            #{gasReductionRate},
+            #{waterReductionRate},
+            #{peakReductionRate},
+            #{solarIncreaseRate},
+            #{expectedScore},
+            #{expectedGrade},
+            #{analysisResult},
+            #{createdAt},
+            #{key}
+        )
+    </insert>
+
+    <select id="findById" resultMap="SimulationResultMap">
+        SELECT sr.*, p.name AS plant_name
+        FROM simulation_results sr
+        JOIN plants p ON p.id = sr.plant_id
+        WHERE sr.id = #{id}
+    </select>
+
+    <select id="findRecent" resultMap="SimulationResultMap">
+        SELECT sr.*, p.name AS plant_name
+        FROM simulation_results sr
+        JOIN plants p ON p.id = sr.plant_id
+        WHERE sr.user_id = #{userId}
+        <if test="plantId != null">AND sr.plant_id = #{plantId}</if>
+        ORDER BY sr.created_at DESC, sr.id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>
