@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -31,6 +33,7 @@ import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.domain.UserRole;
 import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.dto.UserListRequest;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
 import com.smartfactory.scada.user.mapper.UserMapper;
 import com.smartfactory.scada.user.service.UserService;
 
@@ -234,6 +237,97 @@ class UserControllerTest {
 		mockMvc.perform(get("/api/users")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
 				.param("role", "UNKNOWN"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
+	@Test
+	void updateReturnsUnauthorizedWhenTokenIsMissing() throws Exception {
+		mockMvc.perform(patch("/api/users/2")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"name\":\"updated\"}"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+	}
+
+	@Test
+	void updateReturnsUserWhenRequesterIsAdmin() throws Exception {
+		User targetUser = user(2L, UserRole.OPERATOR);
+		User updatedUser = user(2L, UserRole.MANAGER);
+		updatedUser.setName("updated");
+		updatedUser.setPhone("010-9999-8888");
+		updatedUser.setPlantId(2L);
+		updatedUser.setNote("updated note");
+
+		given(jwtTokenProvider.validateToken("admin-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("admin-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.ADMIN)));
+		given(userMapper.findById(2L)).willReturn(Optional.of(targetUser), Optional.of(updatedUser));
+		given(userMapper.updateUser(eq(2L), any(UserUpdateRequest.class))).willReturn(1);
+
+		mockMvc.perform(patch("/api/users/2")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "name": "updated",
+					  "phone": "010-9999-8888",
+					  "role": "MANAGER",
+					  "plantId": 2,
+					  "status": "ACTIVE",
+					  "note": "updated note"
+					}
+					"""))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.userId").value(2L))
+			.andExpect(jsonPath("$.name").value("updated"))
+			.andExpect(jsonPath("$.phone").value("010-9999-8888"))
+			.andExpect(jsonPath("$.role").value("MANAGER"))
+			.andExpect(jsonPath("$.plantId").value(2L))
+			.andExpect(jsonPath("$.note").value("updated note"))
+			.andExpect(jsonPath("$.passwordHash").doesNotExist());
+
+		then(userMapper).should().updateUser(eq(2L), any(UserUpdateRequest.class));
+	}
+
+	@Test
+	void updateReturnsForbiddenWhenRequesterIsViewer() throws Exception {
+		given(jwtTokenProvider.validateToken("viewer-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("viewer-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.VIEWER)));
+
+		mockMvc.perform(patch("/api/users/2")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer viewer-token")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"name\":\"updated\"}"))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("USER_ACCESS_DENIED"));
+	}
+
+	@Test
+	void updateReturnsBadRequestWhenRequestHasNoUpdates() throws Exception {
+		given(jwtTokenProvider.validateToken("admin-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("admin-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.ADMIN)));
+
+		mockMvc.perform(patch("/api/users/2")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{}"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
+	@Test
+	void updateReturnsBadRequestWhenEnumBodyIsInvalid() throws Exception {
+		given(jwtTokenProvider.validateToken("admin-token", TokenType.ACCESS)).willReturn(TokenStatus.VALID);
+		given(jwtTokenProvider.getUserId("admin-token")).willReturn(1L);
+		given(userMapper.findById(1L)).willReturn(Optional.of(user(1L, UserRole.ADMIN)));
+
+		mockMvc.perform(patch("/api/users/2")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer admin-token")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"role\":\"UNKNOWN\"}"))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 	}

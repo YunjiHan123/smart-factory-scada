@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Param;
 
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.dto.UserListRequest;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
 
 @Mapper
 public interface UserMapper {
@@ -25,4 +26,6 @@ public interface UserMapper {
 	List<User> findUsers(@Param("request") UserListRequest request);
 
 	long countUsers(@Param("request") UserListRequest request);
+
+	int updateUser(@Param("id") Long id, @Param("request") UserUpdateRequest request);
 }

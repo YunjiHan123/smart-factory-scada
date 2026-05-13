@@ -1,8 +1,12 @@
 package com.smartfactory.scada.user.controller;
 
+import jakarta.validation.Valid;
+
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,6 +20,7 @@ import com.smartfactory.scada.user.dto.CurrentUserResponse;
 import com.smartfactory.scada.user.dto.UserDetailResponse;
 import com.smartfactory.scada.user.dto.UserListRequest;
 import com.smartfactory.scada.user.dto.UserListResponse;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
 import com.smartfactory.scada.user.service.UserService;
 
 import lombok.RequiredArgsConstructor;
@@ -58,6 +63,16 @@ public class UserController implements UserControllerSpec {
 	) {
 		UserListRequest request = UserListRequest.of(page, size, keyword, role, status, plantId);
 		return userService.getUsers(authenticatedUser, request);
+	}
+
+	@PatchMapping("/{userId}")
+	@Override
+	public UserDetailResponse updateUser(
+		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
+		@PathVariable Long userId,
+		@Valid @RequestBody UserUpdateRequest request
+	) {
+		return userService.updateUser(authenticatedUser, userId, request);
 	}
 
 	@GetMapping("/{userId}")

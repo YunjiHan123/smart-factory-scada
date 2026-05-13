@@ -1,6 +1,7 @@
 package com.smartfactory.scada.common.exception;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -26,6 +27,13 @@ public class GlobalExceptionHandler {
 
 	@ExceptionHandler(MethodArgumentTypeMismatchException.class)
 	public ResponseEntity<ErrorResponse> handleMethodArgumentTypeMismatchException() {
+		return ResponseEntity
+			.status(CommonErrorCode.VALIDATION_ERROR.getStatus())
+			.body(ErrorResponse.from(CommonErrorCode.VALIDATION_ERROR));
+	}
+
+	@ExceptionHandler(HttpMessageNotReadableException.class)
+	public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException() {
 		return ResponseEntity
 			.status(CommonErrorCode.VALIDATION_ERROR.getStatus())
 			.body(ErrorResponse.from(CommonErrorCode.VALIDATION_ERROR));

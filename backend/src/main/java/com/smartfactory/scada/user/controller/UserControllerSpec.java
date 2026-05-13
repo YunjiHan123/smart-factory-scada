@@ -8,11 +8,13 @@ import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.dto.CurrentUserResponse;
 import com.smartfactory.scada.user.dto.UserDetailResponse;
 import com.smartfactory.scada.user.dto.UserListResponse;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -85,6 +87,44 @@ public interface UserControllerSpec {
 
 		@Parameter(description = "사업장 ID 필터", example = "1")
 		Long plantId
+	);
+
+	@Operation(
+		summary = "사용자 정보 수정",
+		description = """
+			사용자 관리 화면에서 특정 사용자의 관리 정보를 부분 수정합니다.<br>
+			요청 body에 보낸 필드만 수정하고, 빠진 필드는 기존 값을 유지합니다.<br>
+			수정 가능 필드는 name, phone, role, plantId, status, note입니다.<br>
+			MANAGER는 ADMIN 사용자를 수정할 수 없고, 다른 사용자를 ADMIN으로 승격할 수도 없습니다.
+			"""
+	)
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "사용자 정보 수정 성공",
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON_VALUE,
+				schema = @Schema(implementation = UserDetailResponse.class)
+			)
+		),
+		@ApiResponse(responseCode = "400", description = "요청값 검증 실패", content = @Content),
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "사용자 관리 권한 없음", content = @Content),
+		@ApiResponse(responseCode = "404", description = "사용자 없음", content = @Content)
+	})
+	UserDetailResponse updateUser(
+		@Parameter(hidden = true)
+		AuthenticatedUser authenticatedUser,
+
+		@Parameter(description = "수정할 사용자 ID", example = "1", required = true)
+		Long userId,
+
+		@RequestBody(
+			description = "수정할 사용자 관리 정보. null 또는 빠진 필드는 수정하지 않습니다.",
+			required = true,
+			content = @Content(schema = @Schema(implementation = UserUpdateRequest.class))
+		)
+		UserUpdateRequest request
 	);
 
 	@Operation(

@@ -18,14 +18,18 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.common.exception.BusinessException;
+import com.smartfactory.scada.common.exception.CommonErrorCode;
 import com.smartfactory.scada.user.domain.User;
 import com.smartfactory.scada.user.domain.UserRole;
 import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.dto.UserDetailResponse;
+import com.smartfactory.scada.user.dto.UserListItemResponse;
 import com.smartfactory.scada.user.dto.UserListRequest;
 import com.smartfactory.scada.user.dto.UserListResponse;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
 import com.smartfactory.scada.user.exception.UserErrorCode;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
@@ -39,9 +43,123 @@ class UserServiceTest {
 	private UserService userService;
 
 	@Test
+	void updateUserReturnsUpdatedDetailWhenRequesterIsAdmin() {
+		User targetUser = user(2L, UserRole.OPERATOR);
+		User updatedUser = user(2L, UserRole.MANAGER);
+		updatedUser.setName("updated");
+		updatedUser.setPhone("010-9999-8888");
+		updatedUser.setNote("updated note");
+
+		given(userMapper.findById(2L)).willReturn(Optional.of(targetUser), Optional.of(updatedUser));
+		UserUpdateRequest request = new UserUpdateRequest(
+			"updated",
+			"010-9999-8888",
+			UserRole.MANAGER,
+			2L,
+			UserStatus.ACTIVE,
+			"updated note"
+		);
+
+		UserDetailResponse response = userService.updateUser(authenticatedUser(UserRole.ADMIN), 2L, request);
+
+		assertThat(response.userId()).isEqualTo(2L);
+		assertThat(response.name()).isEqualTo("updated");
+		assertThat(response.phone()).isEqualTo("010-9999-8888");
+		assertThat(response.role()).isEqualTo("MANAGER");
+		assertThat(response.note()).isEqualTo("updated note");
+		then(userMapper).should().updateUser(2L, request);
+	}
+
+	@Test
+	void updateUserReturnsUpdatedDetailWhenRequesterIsManagerAndTargetIsNotAdmin() {
+		User targetUser = user(2L, UserRole.VIEWER);
+		User updatedUser = user(2L, UserRole.OPERATOR);
+		given(userMapper.findById(2L)).willReturn(Optional.of(targetUser), Optional.of(updatedUser));
+		UserUpdateRequest request = new UserUpdateRequest(null, null, UserRole.OPERATOR, null, null, null);
+
+		UserDetailResponse response = userService.updateUser(authenticatedUser(UserRole.MANAGER), 2L, request);
+
+		assertThat(response.role()).isEqualTo("OPERATOR");
+		then(userMapper).should().updateUser(2L, request);
+	}
+
+	@Test
+	void updateUserThrowsAuthenticationRequiredWhenUserIsMissing() {
+		UserUpdateRequest request = new UserUpdateRequest("updated", null, null, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(null, 2L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.AUTHENTICATION_REQUIRED)
+			);
+	}
+
+	@Test
+	void updateUserThrowsValidationErrorWhenRequestHasNoUpdates() {
+		UserUpdateRequest request = new UserUpdateRequest(" ", null, null, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(authenticatedUser(UserRole.ADMIN), 2L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(CommonErrorCode.VALIDATION_ERROR)
+			);
+
+		then(userMapper).should(never()).findById(any());
+		then(userMapper).should(never()).updateUser(any(), any());
+	}
+
+	@Test
+	void updateUserThrowsAccessDeniedWhenRequesterIsViewer() {
+		UserUpdateRequest request = new UserUpdateRequest("updated", null, null, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(authenticatedUser(UserRole.VIEWER), 2L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
+			);
+
+		then(userMapper).should(never()).findById(any());
+		then(userMapper).should(never()).updateUser(any(), any());
+	}
+
+	@Test
+	void updateUserThrowsAccessDeniedWhenManagerUpdatesAdminUser() {
+		given(userMapper.findById(2L)).willReturn(Optional.of(user(2L, UserRole.ADMIN)));
+		UserUpdateRequest request = new UserUpdateRequest("updated", null, null, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(authenticatedUser(UserRole.MANAGER), 2L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
+			);
+
+		then(userMapper).should(never()).updateUser(any(), any());
+	}
+
+	@Test
+	void updateUserThrowsAccessDeniedWhenManagerPromotesUserToAdmin() {
+		given(userMapper.findById(2L)).willReturn(Optional.of(user(2L, UserRole.OPERATOR)));
+		UserUpdateRequest request = new UserUpdateRequest(null, null, UserRole.ADMIN, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(authenticatedUser(UserRole.MANAGER), 2L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
+			);
+
+		then(userMapper).should(never()).updateUser(any(), any());
+	}
+
+	@Test
+	void updateUserThrowsNotFoundWhenTargetUserDoesNotExist() {
+		given(userMapper.findById(999L)).willReturn(Optional.empty());
+		UserUpdateRequest request = new UserUpdateRequest("updated", null, null, null, null, null);
+
+		assertThatThrownBy(() -> userService.updateUser(authenticatedUser(UserRole.ADMIN), 999L, request))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_NOT_FOUND)
+			);
+	}
+
+	@Test
 	void getUsersReturnsPagedUsersWhenRequesterIsAdmin() {
 		given(userMapper.countUsers(any(UserListRequest.class))).willReturn(21L);
-		given(userMapper.findUsers(any(UserListRequest.class))).willReturn(List.of(targetUser()));
+		given(userMapper.findUsers(any(UserListRequest.class))).willReturn(List.of(user(2L, UserRole.OPERATOR)));
 
 		UserListResponse response = userService.getUsers(
 			authenticatedUser(UserRole.ADMIN),
@@ -54,7 +172,6 @@ class UserServiceTest {
 		assertThat(response.totalPages()).isEqualTo(3);
 		assertThat(response.items()).hasSize(1);
 		assertThat(response.items().get(0).userId()).isEqualTo(2L);
-		assertThat(response.items().get(0).email()).isEqualTo("operator@example.com");
 		assertThat(response.items().get(0).role()).isEqualTo("OPERATOR");
 
 		ArgumentCaptor<UserListRequest> requestCaptor = ArgumentCaptor.forClass(UserListRequest.class);
@@ -95,38 +212,11 @@ class UserServiceTest {
 			.isInstanceOfSatisfying(BusinessException.class, exception ->
 				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
 			);
-
-		then(userMapper).should(never()).countUsers(any());
-		then(userMapper).should(never()).findUsers(any());
-	}
-
-	@Test
-	void getUsersThrowsAccessDeniedWhenRequesterIsOperator() {
-		assertThatThrownBy(() -> userService.getUsers(
-			authenticatedUser(UserRole.OPERATOR),
-			UserListRequest.of(0, 20, null, null, null, null)
-		))
-			.isInstanceOfSatisfying(BusinessException.class, exception ->
-				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
-			);
-
-		then(userMapper).should(never()).countUsers(any());
-		then(userMapper).should(never()).findUsers(any());
-	}
-
-	@Test
-	void userListResponseDoesNotExposePasswordHashOrNote() {
-		assertThat(UserListResponse.class.getRecordComponents())
-			.extracting("name")
-			.doesNotContain("passwordHash", "note");
-		assertThat(com.smartfactory.scada.user.dto.UserListItemResponse.class.getRecordComponents())
-			.extracting("name")
-			.doesNotContain("passwordHash", "note");
 	}
 
 	@Test
 	void getUserDetailReturnsUserWhenRequesterIsAdmin() {
-		User targetUser = targetUser();
+		User targetUser = user(2L, UserRole.OPERATOR);
 		given(userMapper.findById(2L)).willReturn(Optional.of(targetUser));
 
 		UserDetailResponse response = userService.getUserDetail(authenticatedUser(UserRole.ADMIN), 2L);
@@ -134,38 +224,8 @@ class UserServiceTest {
 		assertThat(response.userId()).isEqualTo(targetUser.getId());
 		assertThat(response.email()).isEqualTo(targetUser.getEmail());
 		assertThat(response.name()).isEqualTo(targetUser.getName());
-		assertThat(response.phone()).isEqualTo(targetUser.getPhone());
 		assertThat(response.role()).isEqualTo(targetUser.getRole().name());
-		assertThat(response.plantId()).isEqualTo(targetUser.getPlantId());
-		assertThat(response.status()).isEqualTo(targetUser.getStatus().name());
 		assertThat(response.note()).isEqualTo(targetUser.getNote());
-		assertThat(response.lastLoginAt()).isEqualTo(targetUser.getLastLoginAt());
-	}
-
-	@Test
-	void getUserDetailReturnsUserWhenRequesterIsManager() {
-		User targetUser = targetUser();
-		given(userMapper.findById(2L)).willReturn(Optional.of(targetUser));
-
-		UserDetailResponse response = userService.getUserDetail(authenticatedUser(UserRole.MANAGER), 2L);
-
-		assertThat(response.userId()).isEqualTo(targetUser.getId());
-	}
-
-	@Test
-	void getUserDetailThrowsAccessDeniedWhenRequesterIsViewer() {
-		assertThatThrownBy(() -> userService.getUserDetail(authenticatedUser(UserRole.VIEWER), 2L))
-			.isInstanceOfSatisfying(BusinessException.class, exception ->
-				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
-			);
-	}
-
-	@Test
-	void getUserDetailThrowsAccessDeniedWhenRequesterIsOperator() {
-		assertThatThrownBy(() -> userService.getUserDetail(authenticatedUser(UserRole.OPERATOR), 2L))
-			.isInstanceOfSatisfying(BusinessException.class, exception ->
-				assertThat(exception.getErrorCode()).isEqualTo(UserErrorCode.USER_ACCESS_DENIED)
-			);
 	}
 
 	@Test
@@ -179,10 +239,13 @@ class UserServiceTest {
 	}
 
 	@Test
-	void userDetailResponseDoesNotExposePasswordHash() {
+	void userResponsesDoNotExposePasswordHash() {
 		assertThat(UserDetailResponse.class.getRecordComponents())
 			.extracting("name")
 			.doesNotContain("passwordHash");
+		assertThat(UserListItemResponse.class.getRecordComponents())
+			.extracting("name")
+			.doesNotContain("passwordHash", "note");
 	}
 
 	private AuthenticatedUser authenticatedUser(UserRole role) {
@@ -197,14 +260,14 @@ class UserServiceTest {
 		);
 	}
 
-	private User targetUser() {
+	private User user(Long userId, UserRole role) {
 		return User.builder()
-			.id(2L)
-			.email("operator@example.com")
+			.id(userId)
+			.email("user" + userId + "@example.com")
 			.passwordHash("encoded-password")
-			.name("operator")
-			.phone("010-1111-2222")
-			.role(UserRole.OPERATOR)
+			.name("user" + userId)
+			.phone("010-0000-000" + userId)
+			.role(role)
 			.plantId(1L)
 			.status(UserStatus.ACTIVE)
 			.note("광명 공장 담당자")

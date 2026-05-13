@@ -134,4 +134,29 @@
         SET last_login_at = NOW()
         WHERE id = #{id}
     </update>
+
+    <update id="updateUser">
+        UPDATE users
+        <set>
+            <if test="request.name != null and request.name != ''">
+                name = #{request.name},
+            </if>
+            <if test="request.phone != null and request.phone != ''">
+                phone = #{request.phone},
+            </if>
+            <if test="request.role != null">
+                role = #{request.role},
+            </if>
+            <if test="request.plantId != null">
+                plant_id = #{request.plantId},
+            </if>
+            <if test="request.status != null">
+                status = #{request.status},
+            </if>
+            <if test="request.note != null and request.note != ''">
+                note = #{request.note},
+            </if>
+        </set>
+        WHERE id = #{id}
+    </update>
 </mapper>
