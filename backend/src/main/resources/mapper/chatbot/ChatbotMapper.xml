@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.chatbot.mapper.ChatbotMapper">
+    <resultMap id="ChatbotMessageResultMap" type="com.smartfactory.scada.chatbot.domain.ChatbotMessage">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="question" column="question"/>
+        <result property="answer" column="answer"/>
+        <result property="referencedData" column="referenced_data"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.smartfactory.scada.chatbot.domain.ChatbotMessage" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO chatbot_messages (
+            user_id,
+            plant_id,
+            question,
+            answer,
+            referenced_data,
+            created_at
+        ) VALUES (
+            #{userId},
+            #{plantId},
+            #{question},
+            #{answer},
+            CAST(#{referencedData} AS JSON),
+            #{createdAt}
+        )
+    </insert>
+
+    <select id="findById" resultMap="ChatbotMessageResultMap">
+        SELECT cm.*, p.name AS plant_name
+        FROM chatbot_messages cm
+        LEFT JOIN plants p ON p.id = cm.plant_id
+        WHERE cm.id = #{id}
+    </select>
+
+    <select id="findRecent" resultMap="ChatbotMessageResultMap">
+        SELECT cm.*, p.name AS plant_name
+        FROM chatbot_messages cm
+        LEFT JOIN plants p ON p.id = cm.plant_id
+        WHERE cm.user_id = #{userId}
+        <if test="plantId != null">AND cm.plant_id = #{plantId}</if>
+        ORDER BY cm.created_at DESC, cm.id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>
