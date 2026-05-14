@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
@@ -43,6 +43,8 @@ const navItems = [
   { id: 'alarms', label: '알람', icon: 'A' },
 ]
 
+const validRoutes = ['facility', 'peak', 'utility', 'esg', 'users', 'alarms']
+
 const activeMeta = computed(() => {
   const meta = {
     facility: ['설비별 에너지 현황', '사업장, 설비, 에너지 요약, 최신 수집값을 확인합니다.'],
@@ -52,7 +54,7 @@ const activeMeta = computed(() => {
     users: ['사용자 관리', '사용자 계정과 권한 상태를 확인합니다.'],
     alarms: ['알람 관리', '발생 알람과 처리 상태를 확인합니다.'],
   }
-  const [title, description] = meta[activePage.value]
+  const [title, description] = meta[activePage.value] || meta.facility
   return { title, description }
 })
 
@@ -83,6 +85,37 @@ const peakUsageRate = computed(() => {
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
+
+function routeTo(hash) {
+  if (window.location.hash === `#${hash}`) {
+    applyRoute()
+    return
+  }
+  window.location.hash = hash
+}
+
+function applyRoute() {
+  const route = window.location.hash.replace(/^#/, '') || (getAccessToken() ? '/scada' : '/login')
+
+  if (route === '/login') {
+    appMode.value = 'login'
+    return
+  }
+
+  if (route === '/scada') {
+    appMode.value = 'scada'
+    return
+  }
+
+  const detailMatch = route.match(/^\/detail\/([^/]+)$/)
+  if (detailMatch && validRoutes.includes(detailMatch[1])) {
+    activePage.value = detailMatch[1]
+    appMode.value = 'detail'
+    return
+  }
+
+  routeTo(getAccessToken() ? '/scada' : '/login')
+}
 
 function formatNumber(value, digits = 1) {
   if (value === null || value === undefined || value === '') {
@@ -123,7 +156,7 @@ async function run(task) {
     errorMessage.value = error.message
     if (error.message.includes('인증') || error.message.includes('Unauthorized')) {
       clearTokens()
-      appMode.value = 'login'
+      routeTo('/login')
     }
   } finally {
     loading.value = false
@@ -135,7 +168,7 @@ async function login() {
     const response = await api.login(loginForm)
     saveTokens(response)
     state.me = response
-    appMode.value = 'scada'
+    routeTo('/scada')
     await loadInitial()
   })
 }
@@ -146,7 +179,7 @@ async function logout() {
       await api.logout()
     } finally {
       clearTokens()
-      appMode.value = 'login'
+      routeTo('/login')
     }
   })
 }
@@ -226,6 +259,14 @@ async function resolveAlarm(alarmId) {
   })
 }
 
+function goScada() {
+  routeTo('/scada')
+}
+
+function goDetail(page = 'facility') {
+  routeTo(`/detail/${page}`)
+}
+
 watch(selectedPlantId, () => {
   if (appMode.value !== 'login' && !syncingSelection.value) {
     run(loadPlantData)
@@ -239,9 +280,16 @@ watch(selectedFacilityId, () => {
 })
 
 onMounted(() => {
+  applyRoute()
+  window.addEventListener('hashchange', applyRoute)
+
   if (getAccessToken()) {
     loadInitial()
   }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('hashchange', applyRoute)
 })
 </script>
 
@@ -274,7 +322,7 @@ onMounted(() => {
       <div class="scada-top-actions">
         <span>{{ nowLabel }}</span>
         <button class="ghost-button" type="button" @click="logout">로그아웃</button>
-        <button class="primary-button" type="button" @click="appMode = 'detail'">상세 화면</button>
+        <button class="primary-button" type="button" @click="goDetail()">상세 화면</button>
       </div>
     </header>
 
@@ -377,7 +425,7 @@ onMounted(() => {
 
   <main v-else class="detail-shell">
     <aside class="sidebar">
-      <button class="logo-button" type="button" @click="appMode = 'scada'">
+      <button class="logo-button" type="button" @click="goScada">
         <span class="logo-symbol">SF</span>
         <b>SCADA</b>
       </button>
@@ -387,7 +435,7 @@ onMounted(() => {
           :key="item.id"
           :class="{ active: activePage === item.id }"
           type="button"
-          @click="activePage = item.id"
+          @click="goDetail(item.id)"
         >
           <span>{{ item.icon }}</span>{{ item.label }}
         </button>
@@ -397,7 +445,7 @@ onMounted(() => {
           <span class="avatar">{{ state.me?.name?.slice(0, 1) || 'U' }}</span>
           <span><b>{{ state.me?.name || '사용자' }}</b>{{ state.me?.role || '-' }}</span>
         </button>
-        <button class="collapse-button" type="button" @click="appMode = 'scada'">대시보드</button>
+        <button class="collapse-button" type="button" @click="goScada">대시보드</button>
       </div>
     </aside>
 
