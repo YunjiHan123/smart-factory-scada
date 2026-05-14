@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
+import com.smartfactory.scada.energy.websocket.EnergyRealtimeWebSocketHandler;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ public class EnergyMeasurementMqttService {
 
 	private final ObjectMapper objectMapper;
 	private final EnergyMeasurementRedisService energyMeasurementRedisService;
+	private final EnergyRealtimeWebSocketHandler energyRealtimeWebSocketHandler;
 
 	public void handleMessage(String topic, String payload) {
 		try {
@@ -31,6 +33,7 @@ public class EnergyMeasurementMqttService {
 			);
 
 			energyMeasurementRedisService.saveLatest(message);
+			energyRealtimeWebSocketHandler.broadcast(message);
 		}
 		catch (JsonProcessingException exception) {
 			log.error("Failed to parse MQTT energy payload. topic={}, payload={}", topic, payload, exception);
