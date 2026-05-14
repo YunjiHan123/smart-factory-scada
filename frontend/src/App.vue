@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const appMode = ref('login')
 const activePage = ref('facility')
@@ -128,17 +128,63 @@ const users = [
   ['GJ2044', '박서연', '운영자', '기아 광주', 'gj2044@abc.com', '정상', '2025-05-16 07:44'],
 ]
 
+const validDetailPages = ['facility', 'peak', 'utility', 'esg', 'users']
+
+const applyRoute = () => {
+  const route = window.location.hash.replace(/^#/, '') || '/login'
+
+  if (route === '/login') {
+    appMode.value = 'login'
+    return
+  }
+
+  if (route === '/scada') {
+    appMode.value = 'scada'
+    return
+  }
+
+  const detailMatch = route.match(/^\/detail\/([^/]+)$/)
+  if (detailMatch && validDetailPages.includes(detailMatch[1])) {
+    activePage.value = detailMatch[1]
+    appMode.value = 'detail'
+    return
+  }
+
+  window.location.hash = '/login'
+}
+
+const moveRoute = (route) => {
+  if (window.location.hash === `#${route}`) {
+    applyRoute()
+    return
+  }
+
+  window.location.hash = route
+}
+
+onMounted(() => {
+  applyRoute()
+  window.addEventListener('hashchange', applyRoute)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('hashchange', applyRoute)
+})
+
 const login = () => {
-  appMode.value = 'scada'
+  moveRoute('/scada')
 }
 
 const goDetail = (page = 'facility') => {
-  activePage.value = page
-  appMode.value = 'detail'
+  moveRoute(`/detail/${page}`)
 }
 
 const goScada = () => {
-  appMode.value = 'scada'
+  moveRoute('/scada')
+}
+
+const logout = () => {
+  moveRoute('/login')
 }
 </script>
 
@@ -168,7 +214,7 @@ const goScada = () => {
       </div>
       <div class="scada-top-actions">
         <span>{{ nowLabel }}</span>
-        <button class="ghost-button" type="button" @click="appMode = 'login'">로그아웃</button>
+        <button class="ghost-button" type="button" @click="logout">로그아웃</button>
         <button class="primary-button" type="button" @click="goDetail()">상세 화면</button>
       </div>
     </header>
@@ -289,7 +335,7 @@ const goScada = () => {
       </nav>
 
       <div class="side-footer">
-        <button type="button" @click="appMode = 'login'">
+        <button type="button" @click="logout">
           <span class="avatar">A</span>
           <span>
             <b>기아 화성</b>
