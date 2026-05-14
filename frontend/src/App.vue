@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
@@ -9,6 +9,8 @@ const errorMessage = ref('')
 const selectedPlantId = ref(null)
 const selectedFacilityId = ref(null)
 const syncingSelection = ref(false)
+let energySocket = null
+let energySocketReconnectTimer = null
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -61,14 +63,47 @@ const selectedFacility = computed(() => state.facilities.find((facility) => faci
 const latestSummary = computed(() => state.overview?.latestEnergySummary || state.summaries.at(-1) || null)
 const latestEsg = computed(() => state.overview?.latestEsgScore || state.esgScores[0] || null)
 const recentSummaries = computed(() => state.summaries.slice(-8))
+const latestMeasuredAt = computed(() => metricValue(state.latestEnergy, 'measuredAt', 'measured_at'))
+
+function metricValue(source, camelKey, snakeKey = camelKey) {
+  return source?.[camelKey] ?? source?.[snakeKey]
+}
+
+const summaryChartRows = computed(() => {
+  const rows = recentSummaries.value.slice(-7).map((summary) => ({
+    id: summary.id,
+    label: formatDateTime(summary.summaryAt).slice(5, 16),
+    value: Number(metricValue(summary, 'electricityKwh', 'electricity_kwh') || 0),
+    live: false,
+  }))
+
+  if (state.latestEnergy) {
+    rows.push({
+      id: 'live-latest',
+      label: '현재',
+      value: Number(metricValue(state.latestEnergy, 'electricityKwh', 'electricity_kwh') || 0),
+      live: true,
+      measuredAt: latestMeasuredAt.value,
+    })
+  }
+
+  return rows
+})
+
+function chartHeight(row) {
+  if (row.live) {
+    return Math.max(12, Math.min(row.value / 12, 100))
+  }
+  return Math.max(12, Math.min(row.value / 1200, 100))
+}
 
 const energyCards = computed(() => {
   const source = state.latestEnergy || latestSummary.value || {}
   return [
-    ['전기 사용량', source.electricityKwh, 'kWh', 'electric'],
-    ['가스 사용량', source.gasM3, 'm3', 'gas'],
-    ['용수 사용량', source.waterTon, 'ton', 'water'],
-    ['태양광 발전량', source.solarKwh, 'kWh', 'solar'],
+    ['전기 사용량', metricValue(source, 'electricityKwh', 'electricity_kwh'), 'kWh', 'electric'],
+    ['가스 사용량', metricValue(source, 'gasM3', 'gas_m3'), 'm3', 'gas'],
+    ['용수 사용량', metricValue(source, 'waterTon', 'water_ton'), 'ton', 'water'],
+    ['태양광 발전량', metricValue(source, 'solarKwh', 'solar_kwh'), 'kWh', 'solar'],
   ].map(([label, value, unit, tone]) => ({
     label,
     value: formatNumber(value),
@@ -78,7 +113,9 @@ const energyCards = computed(() => {
 })
 
 const peakUsageRate = computed(() => {
-  const peak = Number(latestSummary.value?.peakKw || state.latestEnergy?.peakKw || 0)
+  const peak = Number(
+    metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
+  )
   return peak ? Math.min(Math.round((peak / 1400) * 100), 999) : 0
 })
 
@@ -145,6 +182,7 @@ async function logout() {
     try {
       await api.logout()
     } finally {
+      stopEnergyWebSocket()
       clearTokens()
       appMode.value = 'login'
     }
@@ -213,6 +251,73 @@ async function loadEnergyData() {
   state.summaries = summaries
   state.measurements = measurements
   state.latestEnergy = latestEnergy
+  startEnergyWebSocket()
+}
+
+async function loadLatestEnergy() {
+  if (!selectedPlantId.value || !selectedFacilityId.value || appMode.value === 'login') {
+    state.latestEnergy = null
+    return
+  }
+
+  state.latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+}
+
+function energyWebSocketUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws/energy`
+}
+
+function startEnergyWebSocket() {
+  if (appMode.value === 'login') {
+    return
+  }
+
+  if (energySocket && energySocket.readyState <= WebSocket.OPEN) {
+    return
+  }
+
+  window.clearTimeout(energySocketReconnectTimer)
+  energySocket = new WebSocket(energyWebSocketUrl())
+
+  energySocket.onmessage = (event) => {
+    let message
+    try {
+      message = JSON.parse(event.data)
+    } catch {
+      return
+    }
+
+    const plantId = Number(metricValue(message, 'plantId', 'plant_id'))
+    const facilityId = Number(metricValue(message, 'facilityId', 'facility_id'))
+
+    if (plantId === Number(selectedPlantId.value) && facilityId === Number(selectedFacilityId.value)) {
+      state.latestEnergy = message
+    }
+  }
+
+  energySocket.onclose = () => {
+    energySocket = null
+    if (appMode.value !== 'login') {
+      energySocketReconnectTimer = window.setTimeout(startEnergyWebSocket, 2000)
+    }
+  }
+
+  energySocket.onerror = () => {
+    energySocket?.close()
+  }
+}
+
+function stopEnergyWebSocket() {
+  window.clearTimeout(energySocketReconnectTimer)
+  energySocketReconnectTimer = null
+
+  if (energySocket) {
+    const socket = energySocket
+    energySocket = null
+    socket.onclose = null
+    socket.close()
+  }
 }
 
 async function refreshData() {
@@ -243,6 +348,8 @@ onMounted(() => {
     loadInitial()
   }
 })
+
+onUnmounted(stopEnergyWebSocket)
 </script>
 
 <template>
@@ -307,7 +414,7 @@ onMounted(() => {
       <article v-for="card in energyCards" :key="card.label" :class="['scada-energy-card', card.tone]">
         <span>{{ card.label }}</span>
         <strong>{{ card.value }} <small>{{ card.unit }}</small></strong>
-        <p>{{ state.latestEnergy ? 'Redis 최신값' : 'DB 요약값' }}</p>
+        <p>{{ state.latestEnergy ? `실시간 수신 ${formatDateTime(latestMeasuredAt).slice(11)}` : 'DB 요약값' }}</p>
       </article>
     </section>
 
@@ -315,12 +422,17 @@ onMounted(() => {
       <article class="scada-panel wide">
         <div class="panel-title inline">
           <h2>최근 에너지 요약 추이</h2>
-          <span class="live-pill">API 연동</span>
+          <span class="live-pill">{{ state.latestEnergy ? '현재값 반영' : 'API 연동' }}</span>
         </div>
         <div class="summary-chart">
-          <div v-for="summary in recentSummaries" :key="summary.id" class="summary-bar">
-            <i :style="{ height: `${Math.max(12, Math.min(Number(summary.electricityKwh || 0) / 45, 100))}%` }"></i>
-            <span>{{ formatDateTime(summary.summaryAt).slice(5, 16) }}</span>
+          <div
+            v-for="summary in summaryChartRows"
+            :key="summary.id"
+            :class="['summary-bar', { live: summary.live }]"
+          >
+            <i :style="{ height: `${chartHeight(summary)}%` }"></i>
+            <span>{{ summary.label }}</span>
+            <b v-if="summary.live">{{ formatNumber(summary.value) }}</b>
           </div>
         </div>
       </article>
@@ -334,7 +446,15 @@ onMounted(() => {
           </article>
           <article>
             <b>피크 전력</b>
-            <span>{{ formatNumber(latestSummary?.peakKw || state.latestEnergy?.peakKw) }} kW / {{ peakUsageRate }}%</span>
+            <span>
+              {{
+                formatNumber(
+                  metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ??
+                    metricValue(latestSummary, 'peakKw', 'peak_kw'),
+                )
+              }}
+              kW / {{ peakUsageRate }}%
+            </span>
           </article>
           <article>
             <b>ESG 등급</b>
@@ -467,7 +587,19 @@ onMounted(() => {
 
       <section v-else-if="activePage === 'peak'" class="page-stack">
         <div class="kpi-grid">
-          <article class="kpi-card"><span>현재 피크</span><b>{{ formatNumber(latestSummary?.peakKw || state.latestEnergy?.peakKw) }} <small>kW</small></b><p>피크 기준 1,400 kW</p></article>
+          <article class="kpi-card">
+            <span>현재 피크</span>
+            <b>
+              {{
+                formatNumber(
+                  metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ??
+                    metricValue(latestSummary, 'peakKw', 'peak_kw'),
+                )
+              }}
+              <small>kW</small>
+            </b>
+            <p>피크 기준 1,400 kW</p>
+          </article>
           <article class="kpi-card cyan"><span>사용률</span><b>{{ peakUsageRate }}<small>%</small></b><p>요약 데이터 기준</p></article>
           <article class="kpi-card purple"><span>알람</span><b>{{ alarmCount }}<small>건</small></b><p>발생 상태</p></article>
           <article class="kpi-card green"><span>요약 건수</span><b>{{ state.summaries.length }}<small>건</small></b><p>선택 조건 기준</p></article>

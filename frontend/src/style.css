@@ -1610,8 +1610,8 @@ td {
 .summary-bar {
   display: grid;
   height: 100%;
-  grid-template-rows: 1fr auto;
-  gap: 8px;
+  grid-template-rows: 1fr auto auto;
+  gap: 5px;
   color: #9cb8d8;
   font-size: 12px;
   font-weight: 800;
@@ -1624,6 +1624,20 @@ td {
   min-height: 12px;
   border-radius: 7px 7px 0 0;
   background: linear-gradient(180deg, #3fa2ff, #0f6fff);
+}
+
+.summary-bar.live {
+  color: #dcfce7;
+}
+
+.summary-bar.live i {
+  background: linear-gradient(180deg, #72ec68, #16a34a);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.24);
+}
+
+.summary-bar b {
+  color: #eaf3ff;
+  font-size: 11px;
 }
 
 @media (max-width: 980px) {
