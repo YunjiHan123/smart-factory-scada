@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { Activity, Bolt, Gauge, History, ListOrdered, Search, Zap } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
@@ -11,9 +12,11 @@ const selectedFacilityId = ref(null)
 const selectedEnergyType = ref('ELECTRICITY')
 const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
+const selectedPeakDate = ref(formatDateInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
+let peakRefreshTimer = null
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -34,6 +37,7 @@ const state = reactive({
   summaries: [],
   measurements: [],
   latestEnergy: null,
+  peakDashboard: null,
   facilityDetail: null,
   alarms: [],
   esgScores: [],
@@ -206,6 +210,41 @@ const peakUsageRate = computed(() => {
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
+const peakMetrics = computed(() => state.peakDashboard?.metrics || {})
+const peakTrend = computed(() => state.peakDashboard?.trend || [])
+const peakRanking = computed(() => state.peakDashboard?.facilityRanking || [])
+const peakHistory = computed(() => state.peakDashboard?.history || [])
+const peakThresholdKw = computed(() => Number(peakMetrics.value.thresholdKw || 1400))
+const peakGaugeRate = computed(() => Math.min(Number(peakMetrics.value.peakUsageRate || 0), 125))
+const peakGaugeStyle = computed(() => ({ '--peak-rate': `${Math.min(peakGaugeRate.value, 100)}%` }))
+const peakTrendMax = computed(() =>
+  Math.max(
+    peakThresholdKw.value,
+    1,
+    ...peakTrend.value.map((point) => Number(point.maxKw || point.max_kw || 0)),
+    ...peakTrend.value.map((point) => Number(point.averageKw || point.average_kw || 0)),
+  ),
+)
+const peakTrendPoints = computed(() =>
+  peakTrend.value.map((point) => ({
+    measuredAt: point.measuredAt || point.measured_at,
+    averageKw: Number(point.averageKw || point.average_kw || 0),
+    maxKw: Number(point.maxKw || point.max_kw || 0),
+  })),
+)
+const peakAveragePath = computed(() => linePath(peakTrendPoints.value, 'averageKw', peakTrendMax.value))
+const peakMaxPath = computed(() => linePath(peakTrendPoints.value, 'maxKw', peakTrendMax.value))
+const peakHistoryRows = computed(() =>
+  peakHistory.value.map((row, index) => ({
+    ...row,
+    rank: index + 1,
+    measuredAt: row.measuredAt || row.measured_at,
+    peakKw: row.peakKw || row.peak_kw,
+    peakUsageRate: row.peakUsageRate || row.peak_usage_rate,
+    durationMinutes: row.durationMinutes || row.duration_minutes,
+    thresholdKw: row.thresholdKw || row.threshold_kw,
+  })),
+)
 
 function routeTo(hash) {
   if (window.location.hash === `#${hash}`) {
@@ -252,6 +291,28 @@ function formatDateTime(value) {
     return '-'
   }
   return value.replace('T', ' ').slice(0, 16)
+}
+
+function formatTime(value) {
+  const formatted = formatDateTime(value)
+  return formatted === '-' ? '-' : formatted.slice(11, 16)
+}
+
+function linePath(points, key, maxValue) {
+  if (!points.length) {
+    return ''
+  }
+  const width = 720
+  const height = 220
+  const gap = points.length <= 1 ? width : width / (points.length - 1)
+  return points
+    .map((point, index) => {
+      const x = Math.round(index * gap)
+      const ratio = Math.min(Number(point[key] || 0) / maxValue, 1)
+      const y = Math.round(height - ratio * (height - 24) - 12)
+      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
+    })
+    .join(' ')
 }
 
 function statusLabel(status) {
@@ -340,6 +401,7 @@ async function loadPlantData() {
   syncingSelection.value = false
 
   await loadEnergyData()
+  await loadPeakDashboard()
 }
 
 async function loadEnergyData() {
@@ -388,6 +450,18 @@ async function loadFacilityDetail() {
   })
 }
 
+async function loadPeakDashboard() {
+  if (!selectedPlantId.value) {
+    state.peakDashboard = null
+    return
+  }
+
+  state.peakDashboard = await api.peakDashboard({
+    plantId: selectedPlantId.value,
+    date: selectedPeakDate.value || undefined,
+  })
+}
+
 async function loadLatestEnergy() {
   if (!selectedPlantId.value || !selectedFacilityId.value || appMode.value === 'login') {
     state.latestEnergy = null
@@ -428,6 +502,9 @@ function startEnergyWebSocket() {
     if (plantId === Number(selectedPlantId.value) && facilityId === Number(selectedFacilityId.value)) {
       state.latestEnergy = message
     }
+    if (plantId === Number(selectedPlantId.value) && activePage.value === 'peak') {
+      schedulePeakRefresh()
+    }
   }
 
   energySocket.onclose = () => {
@@ -456,6 +533,13 @@ function stopEnergyWebSocket() {
 
 async function refreshData() {
   await run(loadPlantData)
+}
+
+function schedulePeakRefresh() {
+  window.clearTimeout(peakRefreshTimer)
+  peakRefreshTimer = window.setTimeout(() => {
+    loadPeakDashboard().catch(() => {})
+  }, 500)
 }
 
 async function resolveAlarm(alarmId) {
@@ -497,6 +581,12 @@ watch([selectedDateFrom, selectedDateTo], () => {
   }
 })
 
+watch(selectedPeakDate, () => {
+  if (appMode.value !== 'login' && !syncingSelection.value) {
+    run(loadPeakDashboard)
+  }
+})
+
 onMounted(() => {
   applyRoute()
   window.addEventListener('hashchange', applyRoute)
@@ -508,6 +598,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
+  window.clearTimeout(peakRefreshTimer)
   window.removeEventListener('hashchange', applyRoute)
 })
 </script>
@@ -700,7 +791,7 @@ onUnmounted(() => {
             <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
           </select>
         </label>
-        <label>
+        <label v-if="activePage !== 'peak'">
           설비
           <select v-model.number="selectedFacilityId">
             <option :value="null">전체 설비</option>
@@ -709,7 +800,7 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label>
+        <label v-if="activePage !== 'peak'">
           에너지 종류
           <select v-model="selectedEnergyType">
             <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
@@ -717,11 +808,11 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label>
+        <label v-if="activePage !== 'peak'">
           시작일
           <input v-model="selectedDateFrom" type="date" />
         </label>
-        <label>
+        <label v-if="activePage !== 'peak'">
           종료일
           <input v-model="selectedDateTo" type="date" />
         </label>
@@ -831,25 +922,152 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <section v-else-if="activePage === 'peak'" class="page-stack">
-        <div class="kpi-grid">
-          <article class="kpi-card">
-            <span>현재 피크</span>
-            <b>
-              {{
-                formatNumber(
-                  metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ??
-                    metricValue(latestSummary, 'peakKw', 'peak_kw'),
-                )
-              }}
-              <small>kW</small>
-            </b>
-            <p>피크 기준 1,400 kW</p>
+      <section v-else-if="activePage === 'peak'" class="page-stack peak-monitor-page">
+        <section class="peak-filter-row">
+          <label>
+            조회일
+            <input v-model="selectedPeakDate" type="date" />
+          </label>
+          <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
+            <Search :size="17" /> 조회
+          </button>
+          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+        </section>
+
+        <section class="peak-kpi-grid">
+          <article class="peak-kpi-card">
+            <span class="peak-card-icon blue"><Zap :size="22" /></span>
+            <div>
+              <p>현재 전력 사용량</p>
+              <b>{{ formatNumber(peakMetrics.currentKw) }}<small> kW</small></b>
+              <em>측정 {{ formatTime(peakMetrics.measuredAt) }}</em>
+            </div>
           </article>
-          <article class="kpi-card cyan"><span>사용률</span><b>{{ peakUsageRate }}<small>%</small></b><p>요약 데이터 기준</p></article>
-          <article class="kpi-card purple"><span>알람</span><b>{{ alarmCount }}<small>건</small></b><p>발생 상태</p></article>
-          <article class="kpi-card green"><span>요약 건수</span><b>{{ state.summaries.length }}<small>건</small></b><p>선택 조건 기준</p></article>
-        </div>
+          <article class="peak-kpi-card">
+            <span class="peak-card-icon cyan"><Gauge :size="22" /></span>
+            <div>
+              <p>피크 사용률</p>
+              <b>{{ formatNumber(peakMetrics.peakUsageRate) }}<small>%</small></b>
+              <em>피크 기준 {{ formatNumber(peakMetrics.thresholdKw, 0) }} kW</em>
+            </div>
+          </article>
+          <article class="peak-kpi-card">
+            <span class="peak-card-icon green"><Activity :size="22" /></span>
+            <div>
+              <p>15분 평균 전력</p>
+              <b>{{ formatNumber(peakMetrics.intervalAverageKw) }}<small> kW</small></b>
+              <em>구간 {{ formatTime(peakMetrics.intervalAt) }}</em>
+            </div>
+          </article>
+          <article class="peak-kpi-card">
+            <span class="peak-card-icon purple"><Bolt :size="22" /></span>
+            <div>
+              <p>15분 최대 전력</p>
+              <b>{{ formatNumber(peakMetrics.intervalMaxKw) }}<small> kW</small></b>
+              <em>금일 집계 기준</em>
+            </div>
+          </article>
+        </section>
+
+        <section class="peak-content-grid">
+          <article class="panel peak-gauge-panel">
+            <div class="panel-title inline">
+              <h2>피크 사용률 현황</h2>
+              <span>단위: %</span>
+            </div>
+            <div class="peak-gauge" :style="peakGaugeStyle">
+              <div>
+                <strong>{{ formatNumber(peakMetrics.peakUsageRate) }}%</strong>
+                <span>{{ formatNumber(peakMetrics.currentKw) }} / {{ formatNumber(peakMetrics.thresholdKw, 0) }} kW</span>
+              </div>
+            </div>
+            <div class="peak-scale">
+              <span>0</span><span>50</span><span>100</span><span>125</span>
+            </div>
+          </article>
+
+          <article class="panel peak-chart-panel">
+            <div class="panel-title inline">
+              <h2>금일 피크 전력 추이</h2>
+              <div class="peak-legend">
+                <span><i class="avg"></i>15분 평균</span>
+                <span><i class="max"></i>15분 최대</span>
+                <span><i class="limit"></i>피크 기준</span>
+              </div>
+            </div>
+            <svg class="peak-line-chart" viewBox="0 0 720 240" role="img" aria-label="금일 피크 전력 추이">
+              <g class="peak-grid-lines">
+                <line v-for="row in 5" :key="row" x1="0" x2="720" :y1="row * 44" :y2="row * 44" />
+              </g>
+              <line
+                class="peak-threshold-line"
+                x1="0"
+                x2="720"
+                :y1="220 - Math.min(peakThresholdKw / peakTrendMax, 1) * 196"
+                :y2="220 - Math.min(peakThresholdKw / peakTrendMax, 1) * 196"
+              />
+              <path v-if="peakAveragePath" class="peak-line avg" :d="peakAveragePath" />
+              <path v-if="peakMaxPath" class="peak-line max" :d="peakMaxPath" />
+            </svg>
+            <div class="peak-chart-axis">
+              <span>{{ formatTime(peakTrendPoints[0]?.measuredAt) }}</span>
+              <span>{{ formatNumber(peakTrendMax, 0) }} kW</span>
+              <span>{{ formatTime(peakTrendPoints.at(-1)?.measuredAt) }}</span>
+            </div>
+          </article>
+
+          <article class="panel peak-ranking-panel">
+            <div class="panel-title inline">
+              <h2>설비별 전력 사용 순위</h2>
+              <ListOrdered :size="20" />
+            </div>
+            <div class="peak-ranking-list">
+              <article v-for="(item, index) in peakRanking" :key="item.facilityId || index">
+                <b>{{ index + 1 }}</b>
+                <div>
+                  <strong>{{ item.facilityName || `설비 ${item.facilityId}` }}</strong>
+                  <span>{{ formatNumber(item.usageKwh) }} kWh · 피크 {{ formatNumber(item.peakKw) }} kW</span>
+                  <i :style="{ width: `${Math.min(Number(item.shareRate || 0), 100)}%` }"></i>
+                </div>
+                <em>{{ formatNumber(item.shareRate) }}%</em>
+              </article>
+            </div>
+          </article>
+        </section>
+
+        <article class="panel table-panel peak-history-panel">
+          <div class="panel-title inline">
+            <h2>피크 이력</h2>
+            <History :size="20" />
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>순번</th>
+                <th>발생 일시</th>
+                <th>피크 전력</th>
+                <th>피크 사용률</th>
+                <th>지속 시간</th>
+                <th>기준 전력</th>
+                <th>비고</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in peakHistoryRows" :key="`${row.measuredAt}-${row.rank}`">
+                <td>{{ row.rank }}</td>
+                <td>{{ formatDateTime(row.measuredAt) }}</td>
+                <td>{{ formatNumber(row.peakKw) }} kW</td>
+                <td :class="{ up: Number(row.peakUsageRate || 0) >= 100 }">{{ formatNumber(row.peakUsageRate) }}%</td>
+                <td>{{ row.durationMinutes || 15 }}분</td>
+                <td>{{ formatNumber(row.thresholdKw, 0) }} kW</td>
+                <td>{{ row.exceeded ? '피크 초과' : '-' }}</td>
+              </tr>
+              <tr v-if="!peakHistoryRows.length">
+                <td colspan="7">조회된 피크 이력이 없습니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
       </section>
 
       <section v-else-if="activePage === 'utility'" class="page-stack">

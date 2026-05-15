@@ -74,6 +74,7 @@ export const api = {
   energySummaries: (params) => apiFetch(`/api/energy/summaries${toQuery(params)}`),
   energyMeasurements: (params) => apiFetch(`/api/energy/measurements${toQuery(params)}`),
   energyFacilityDetail: (params) => apiFetch(`/api/energy/facility-detail${toQuery(params)}`),
+  peakDashboard: (params) => apiFetch(`/api/energy/peak-dashboard${toQuery(params)}`),
   latestEnergy: (plantId, facilityId) => apiFetch(`/api/energy/latest/plants/${plantId}/facilities/${facilityId}`),
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),
   resolveAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}/resolve`, { method: 'PATCH' }),

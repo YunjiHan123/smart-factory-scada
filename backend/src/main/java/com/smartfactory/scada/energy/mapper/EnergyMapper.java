@@ -10,6 +10,9 @@ import org.apache.ibatis.annotations.Param;
 import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
+import com.smartfactory.scada.energy.dto.PeakPowerHistory;
+import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 
 @Mapper
 public interface EnergyMapper {
@@ -71,4 +74,31 @@ public interface EnergyMapper {
 	);
 
 	Optional<EnergySummary> findLatestPlantSummary(@Param("plantId") Long plantId);
+
+	List<PeakPowerTrendPoint> findPeakPowerTrend(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<PeakPowerFacilityRanking> findPeakPowerFacilityRanking(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to,
+		@Param("limit") int limit
+	);
+
+	List<PeakPowerHistory> findPeakPowerHistory(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to,
+		@Param("thresholdKw") java.math.BigDecimal thresholdKw,
+		@Param("limit") int limit
+	);
+
+	Optional<EnergyMeasurement> findLatestPlantMeasurement(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
 }

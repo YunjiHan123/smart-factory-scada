@@ -27,6 +27,11 @@ import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsag
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
+import com.smartfactory.scada.energy.dto.PeakPowerDashboardResponse;
+import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
+import com.smartfactory.scada.energy.dto.PeakPowerHistory;
+import com.smartfactory.scada.energy.dto.PeakPowerMetricResponse;
+import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.Facility;
 import com.smartfactory.scada.facility.mapper.FacilityMapper;
@@ -39,6 +44,7 @@ public class EnergyService {
 
 	private static final int DEFAULT_LIMIT = 100;
 	private static final int MAX_LIMIT = 500;
+	private static final BigDecimal FACILITY_PEAK_THRESHOLD_KW = BigDecimal.valueOf(1400);
 
 	private final EnergyMapper energyMapper;
 	private final FacilityMapper facilityMapper;
@@ -91,6 +97,53 @@ public class EnergyService {
 	public Optional<EnergyMeasurementResponse> getLatestMeasurement(Long plantId, Long facilityId) {
 		return energyMapper.findLatestMeasurement(plantId, facilityId)
 			.map(EnergyMeasurementResponse::from);
+	}
+
+	@Transactional(readOnly = true)
+	public PeakPowerDashboardResponse getPeakDashboard(Long plantId, LocalDate targetDate) {
+		if (plantId == null) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
+		LocalDateTime from = resolvedDate.atStartOfDay();
+		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
+		BigDecimal thresholdKw = peakThresholdForPlant(plantId);
+
+		List<PeakPowerTrendPoint> trend = energyMapper.findPeakPowerTrend(plantId, from, to);
+		List<PeakPowerFacilityRanking> ranking = energyMapper.findPeakPowerFacilityRanking(plantId, from, to, 5);
+		List<PeakPowerHistory> history = energyMapper.findPeakPowerHistory(
+			plantId,
+			from,
+			to,
+			thresholdKw,
+			10
+		);
+
+		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
+		PeakPowerTrendPoint latestInterval = trend.isEmpty() ? null : trend.get(trend.size() - 1);
+		BigDecimal currentKw = latestMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestMeasurement.getPeakKw());
+		BigDecimal intervalAverageKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getAverageKw());
+		BigDecimal intervalMaxKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getMaxKw());
+
+		PeakPowerMetricResponse metrics = new PeakPowerMetricResponse(
+			currentKw,
+			rateOf(currentKw, thresholdKw),
+			intervalAverageKw,
+			intervalMaxKw,
+			thresholdKw,
+			latestMeasurement == null ? null : latestMeasurement.getMeasuredAt(),
+			latestInterval == null ? null : latestInterval.getMeasuredAt()
+		);
+
+		return new PeakPowerDashboardResponse(
+			plantId,
+			resolvedDate,
+			metrics,
+			trend,
+			ranking,
+			history
+		);
 	}
 
 	@Transactional(readOnly = true)
@@ -237,6 +290,27 @@ public class EnergyService {
 		return currentUsage.subtract(previousUsage)
 			.multiply(BigDecimal.valueOf(100))
 			.divide(previousUsage, 1, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal rateOf(BigDecimal value, BigDecimal baseline) {
+		if (baseline == null || baseline.compareTo(BigDecimal.ZERO) == 0) {
+			return BigDecimal.ZERO;
+		}
+		return zeroIfNull(value)
+			.multiply(BigDecimal.valueOf(100))
+			.divide(baseline, 1, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal zeroIfNull(BigDecimal value) {
+		return value == null ? BigDecimal.ZERO : value;
+	}
+
+	private BigDecimal peakThresholdForPlant(Long plantId) {
+		int facilityCount = facilityMapper.findByPlantId(plantId).size();
+		if (facilityCount <= 0) {
+			return FACILITY_PEAK_THRESHOLD_KW;
+		}
+		return FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(facilityCount));
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {

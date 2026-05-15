@@ -31,6 +31,29 @@
         <result property="carbonEmission" column="carbon_emission"/>
     </resultMap>
 
+    <resultMap id="PeakPowerTrendPointResultMap" type="com.smartfactory.scada.energy.dto.PeakPowerTrendPoint">
+        <result property="measuredAt" column="measured_at"/>
+        <result property="averageKw" column="average_kw"/>
+        <result property="maxKw" column="max_kw"/>
+    </resultMap>
+
+    <resultMap id="PeakPowerFacilityRankingResultMap" type="com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking">
+        <result property="facilityId" column="facility_id"/>
+        <result property="facilityName" column="facility_name"/>
+        <result property="usageKwh" column="usage_kwh"/>
+        <result property="peakKw" column="peak_kw"/>
+        <result property="shareRate" column="share_rate"/>
+    </resultMap>
+
+    <resultMap id="PeakPowerHistoryResultMap" type="com.smartfactory.scada.energy.dto.PeakPowerHistory">
+        <result property="measuredAt" column="measured_at"/>
+        <result property="peakKw" column="peak_kw"/>
+        <result property="peakUsageRate" column="peak_usage_rate"/>
+        <result property="durationMinutes" column="duration_minutes"/>
+        <result property="thresholdKw" column="threshold_kw"/>
+        <result property="exceeded" column="exceeded"/>
+    </resultMap>
+
     <insert id="insertMeasurement" parameterType="com.smartfactory.scada.energy.domain.EnergyMeasurement" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO energy_measurements (
             plant_id,
@@ -379,5 +402,148 @@
           AND facility_id IS NULL
         ORDER BY summary_at DESC, id DESC
         LIMIT 1
+    </select>
+
+    <select id="findPeakPowerTrend" resultMap="PeakPowerTrendPointResultMap">
+        WITH bucket_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_at,
+                AVG(peak_kw) AS average_kw,
+                MAX(peak_kw) AS max_kw
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND peak_kw IS NOT NULL
+            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
+        )
+        SELECT
+            measured_at,
+            ROUND(COALESCE(SUM(average_kw), 0), 2) AS average_kw,
+            ROUND(COALESCE(SUM(max_kw), 0), 2) AS max_kw
+        FROM bucket_facility
+        GROUP BY measured_at
+        ORDER BY measured_at ASC
+    </select>
+
+    <select id="findPeakPowerFacilityRanking" resultMap="PeakPowerFacilityRankingResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                em.id,
+                em.plant_id,
+                em.facility_id,
+                em.measured_at,
+                em.electricity_kwh,
+                em.peak_kw,
+                LAG(em.electricity_kwh) OVER (
+                    PARTITION BY em.plant_id, em.facility_id
+                    ORDER BY em.measured_at ASC, em.id ASC
+                ) AS previous_electricity_kwh
+            FROM energy_measurements em
+            WHERE em.plant_id = #{plantId}
+              AND em.measured_at &gt;= #{from}
+              AND em.measured_at &lt; #{to}
+        ),
+        facility_usage AS (
+            SELECT
+                plant_id,
+                facility_id,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_electricity_kwh IS NULL THEN 0
+                        WHEN electricity_kwh &gt;= previous_electricity_kwh THEN electricity_kwh - previous_electricity_kwh
+                        ELSE 0
+                    END
+                ), 0) AS usage_kwh,
+                COALESCE(MAX(peak_kw), 0) AS peak_kw
+            FROM ordered_measurements
+            GROUP BY plant_id, facility_id
+        )
+        SELECT
+            fu.facility_id,
+            f.name AS facility_name,
+            ROUND(fu.usage_kwh, 2) AS usage_kwh,
+            ROUND(fu.peak_kw, 2) AS peak_kw,
+            ROUND(
+                CASE
+                    WHEN SUM(fu.usage_kwh) OVER () = 0 THEN 0
+                    ELSE fu.usage_kwh / SUM(fu.usage_kwh) OVER () * 100
+                END,
+                1
+            ) AS share_rate
+        FROM facility_usage fu
+        JOIN facilities f ON f.id = fu.facility_id
+        ORDER BY fu.usage_kwh DESC, fu.peak_kw DESC, fu.facility_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findPeakPowerHistory" resultMap="PeakPowerHistoryResultMap">
+        WITH bucket_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_at,
+                MAX(peak_kw) AS max_kw
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND peak_kw IS NOT NULL
+            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
+        ),
+        trend AS (
+            SELECT
+                measured_at,
+                ROUND(COALESCE(SUM(max_kw), 0), 2) AS peak_kw
+            FROM bucket_facility
+            GROUP BY measured_at
+        )
+        SELECT
+            measured_at,
+            peak_kw,
+            ROUND(
+                CASE WHEN #{thresholdKw} = 0 THEN 0 ELSE peak_kw / #{thresholdKw} * 100 END,
+                1
+            ) AS peak_usage_rate,
+            15 AS duration_minutes,
+            #{thresholdKw} AS threshold_kw,
+            peak_kw &gt; #{thresholdKw} AS exceeded
+        FROM trend
+        WHERE peak_kw &gt;= #{thresholdKw} * 0.8
+        ORDER BY peak_kw DESC, measured_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findLatestPlantMeasurement" resultMap="EnergyMeasurementResultMap">
+        WITH latest_per_facility AS (
+            SELECT em.*
+            FROM energy_measurements em
+            JOIN (
+                SELECT facility_id, MAX(measured_at) AS measured_at
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND measured_at &gt;= #{from}
+                  AND measured_at &lt; #{to}
+                GROUP BY facility_id
+            ) latest
+              ON latest.facility_id = em.facility_id
+             AND latest.measured_at = em.measured_at
+            WHERE em.plant_id = #{plantId}
+        )
+        SELECT
+            NULL AS id,
+            plant_id,
+            NULL AS facility_id,
+            MAX(measured_at) AS measured_at,
+            COALESCE(SUM(electricity_kwh), 0) AS electricity_kwh,
+            COALESCE(SUM(gas_m3), 0) AS gas_m3,
+            COALESCE(SUM(water_ton), 0) AS water_ton,
+            COALESCE(SUM(solar_kwh), 0) AS solar_kwh,
+            COALESCE(SUM(peak_kw), 0) AS peak_kw,
+            NULL AS created_at
+        FROM latest_per_facility
+        GROUP BY plant_id
     </select>
 </mapper>
