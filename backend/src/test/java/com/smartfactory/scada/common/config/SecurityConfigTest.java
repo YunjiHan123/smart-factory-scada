@@ -20,6 +20,7 @@ import com.smartfactory.scada.auth.security.JwtAuthenticationEntryPoint;
 import com.smartfactory.scada.common.exception.GlobalExceptionHandler;
 import com.smartfactory.scada.user.controller.UserController;
 import com.smartfactory.scada.user.mapper.UserMapper;
+import com.smartfactory.scada.user.service.UserService;
 
 @WebMvcTest(UserController.class)
 @Import({
@@ -38,6 +39,9 @@ class SecurityConfigTest {
 
 	@MockitoBean
 	private UserMapper userMapper;
+
+	@MockitoBean
+	private UserService userService;
 
 	@Test
 	void swaggerApiDocsIsNotBlockedByAuthentication() throws Exception {

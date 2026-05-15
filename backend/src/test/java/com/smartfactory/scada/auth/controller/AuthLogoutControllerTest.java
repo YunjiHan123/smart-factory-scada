@@ -26,6 +26,8 @@ import com.smartfactory.scada.auth.service.AuthService;
 import com.smartfactory.scada.common.config.SecurityConfig;
 import com.smartfactory.scada.common.exception.GlobalExceptionHandler;
 import com.smartfactory.scada.user.domain.User;
+import com.smartfactory.scada.user.domain.UserRole;
+import com.smartfactory.scada.user.domain.UserStatus;
 import com.smartfactory.scada.user.mapper.UserMapper;
 
 @WebMvcTest(AuthController.class)
@@ -63,7 +65,11 @@ class AuthLogoutControllerTest {
 		given(userMapper.findById(1L)).willReturn(Optional.of(User.builder()
 			.id(1L)
 			.email("login@example.com")
-			.nickname("tester")
+			.name("tester")
+			.phone("010-0000-0000")
+			.role(UserRole.VIEWER)
+			.plantId(1L)
+			.status(UserStatus.ACTIVE)
 			.build()));
 
 		mockMvc.perform(post("/api/auth/logout")
@@ -73,7 +79,11 @@ class AuthLogoutControllerTest {
 		then(authService).should().logout(eq(new com.smartfactory.scada.auth.security.AuthenticatedUser(
 			1L,
 			"login@example.com",
-			"tester"
+			"tester",
+			"010-0000-0000",
+			UserRole.VIEWER.name(),
+			1L,
+			UserStatus.ACTIVE.name()
 		)));
 	}
 

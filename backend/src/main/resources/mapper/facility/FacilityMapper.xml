@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.facility.mapper.FacilityMapper">
+    <resultMap id="FacilityResultMap" type="com.smartfactory.scada.facility.domain.Facility">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="name" column="name"/>
+        <result property="facilityType" column="facility_type"/>
+        <result property="status" column="status"/>
+    </resultMap>
+
+    <select id="findByPlantId" resultMap="FacilityResultMap">
+        SELECT id, plant_id, name, facility_type, status
+        FROM facilities
+        WHERE plant_id = #{plantId}
+        ORDER BY facility_type, name
+    </select>
+
+    <select id="findById" resultMap="FacilityResultMap">
+        SELECT id, plant_id, name, facility_type, status
+        FROM facilities
+        WHERE id = #{id}
+    </select>
+</mapper>

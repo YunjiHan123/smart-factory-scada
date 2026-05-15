@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.alarm.mapper.AlarmMapper">
+    <resultMap id="AlarmResultMap" type="com.smartfactory.scada.alarm.domain.Alarm">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="facilityId" column="facility_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="facilityName" column="facility_name"/>
+        <result property="alarmType" column="alarm_type"/>
+        <result property="alarmLevel" column="alarm_level"/>
+        <result property="message" column="message"/>
+        <result property="value" column="value"/>
+        <result property="thresholdValue" column="threshold_value"/>
+        <result property="occurredAt" column="occurred_at"/>
+        <result property="resolvedAt" column="resolved_at"/>
+        <result property="status" column="status"/>
+    </resultMap>
+
+    <sql id="AlarmColumns">
+        a.id,
+        a.plant_id,
+        a.facility_id,
+        p.name AS plant_name,
+        f.name AS facility_name,
+        a.alarm_type,
+        a.alarm_level,
+        a.message,
+        a.value,
+        a.threshold_value,
+        a.occurred_at,
+        a.resolved_at,
+        a.status
+    </sql>
+
+    <select id="findAlarms" resultMap="AlarmResultMap">
+        SELECT <include refid="AlarmColumns"/>
+        FROM alarms a
+        JOIN plants p ON p.id = a.plant_id
+        LEFT JOIN facilities f ON f.id = a.facility_id
+        <where>
+            <if test="plantId != null">AND a.plant_id = #{plantId}</if>
+            <if test="status != null">AND a.status = #{status}</if>
+            <if test="alarmLevel != null">AND a.alarm_level = #{alarmLevel}</if>
+        </where>
+        ORDER BY a.occurred_at DESC, a.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findById" resultMap="AlarmResultMap">
+        SELECT <include refid="AlarmColumns"/>
+        FROM alarms a
+        JOIN plants p ON p.id = a.plant_id
+        LEFT JOIN facilities f ON f.id = a.facility_id
+        WHERE a.id = #{id}
+    </select>
+
+    <update id="resolve">
+        UPDATE alarms
+        SET status = 'RESOLVED',
+            resolved_at = NOW()
+        WHERE id = #{id}
+          AND status = 'OCCURRED'
+    </update>
+
+    <select id="countOccurred" resultType="long">
+        SELECT COUNT(*)
+        FROM alarms
+        WHERE status = 'OCCURRED'
+        <if test="plantId != null">AND plant_id = #{plantId}</if>
+    </select>
+</mapper>

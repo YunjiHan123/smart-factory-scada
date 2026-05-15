@@ -21,7 +21,19 @@ public class User {
 
 	private String passwordHash;
 
-	private String nickname;
+	private String name;
+
+	private String phone;
+
+	private UserRole role;
+
+	private Long plantId;
+
+	private UserStatus status;
+
+	private String note;
+
+	private LocalDateTime lastLoginAt;
 
 	private LocalDateTime createdAt;
 

@@ -8,7 +8,13 @@
         <id property="id" column="id"/>
         <result property="email" column="email"/>
         <result property="passwordHash" column="password_hash"/>
-        <result property="nickname" column="nickname"/>
+        <result property="name" column="name"/>
+        <result property="phone" column="phone"/>
+        <result property="role" column="role"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="status" column="status"/>
+        <result property="note" column="note"/>
+        <result property="lastLoginAt" column="last_login_at"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
@@ -18,7 +24,13 @@
             id,
             email,
             password_hash,
-            nickname,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note,
+            last_login_at,
             created_at,
             updated_at
         FROM users
@@ -30,7 +42,13 @@
             id,
             email,
             password_hash,
-            nickname,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note,
+            last_login_at,
             created_at,
             updated_at
         FROM users
@@ -45,15 +63,100 @@
         )
     </select>
 
+    <sql id="UserListWhere">
+        <where>
+            <if test="request.keyword != null and request.keyword != ''">
+                AND (
+                    email LIKE CONCAT('%', #{request.keyword}, '%')
+                    OR name LIKE CONCAT('%', #{request.keyword}, '%')
+                    OR phone LIKE CONCAT('%', #{request.keyword}, '%')
+                )
+            </if>
+            <if test="request.role != null">
+                AND role = #{request.role}
+            </if>
+            <if test="request.status != null">
+                AND status = #{request.status}
+            </if>
+            <if test="request.plantId != null">
+                AND plant_id = #{request.plantId}
+            </if>
+        </where>
+    </sql>
+
+    <select id="findUsers" resultMap="UserResultMap">
+        SELECT
+            id,
+            email,
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            last_login_at,
+            created_at
+        FROM users
+        <include refid="UserListWhere"/>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{request.size} OFFSET #{request.offset}
+    </select>
+
+    <select id="countUsers" resultType="long">
+        SELECT COUNT(*)
+        FROM users
+        <include refid="UserListWhere"/>
+    </select>
+
     <insert id="insert" parameterType="com.smartfactory.scada.user.domain.User" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO users (
             email,
             password_hash,
-            nickname
+            name,
+            phone,
+            role,
+            plant_id,
+            status,
+            note
         ) VALUES (
             #{email},
             #{passwordHash},
-            #{nickname}
+            #{name},
+            #{phone},
+            #{role},
+            #{plantId},
+            #{status},
+            #{note}
         )
     </insert>
+
+    <update id="updateLastLoginAt">
+        UPDATE users
+        SET last_login_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateUser">
+        UPDATE users
+        <set>
+            <if test="request.name != null and request.name != ''">
+                name = #{request.name},
+            </if>
+            <if test="request.phone != null and request.phone != ''">
+                phone = #{request.phone},
+            </if>
+            <if test="request.role != null">
+                role = #{request.role},
+            </if>
+            <if test="request.plantId != null">
+                plant_id = #{request.plantId},
+            </if>
+            <if test="request.status != null">
+                status = #{request.status},
+            </if>
+            <if test="request.note != null and request.note != ''">
+                note = #{request.note},
+            </if>
+        </set>
+        WHERE id = #{id}
+    </update>
 </mapper>

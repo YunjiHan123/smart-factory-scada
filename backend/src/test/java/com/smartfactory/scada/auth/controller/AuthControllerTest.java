@@ -47,9 +47,9 @@ class AuthControllerTest {
 
 	@Test
 	void signupReturnsCreatedStatus() throws Exception {
-		SignupRequest request = new SignupRequest("new-user@example.com", "password1234!", "tester");
+		SignupRequest request = new SignupRequest("new-user@example.com", "password1234!", "tester", "010-0000-0000", 1L);
 		given(authService.signup(any(SignupRequest.class)))
-			.willReturn(new SignupResponse(1L, request.email(), request.nickname()));
+			.willReturn(new SignupResponse(1L, request.email(), request.name(), request.phone(), "VIEWER", request.plantId(), "ACTIVE"));
 
 		mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -57,12 +57,18 @@ class AuthControllerTest {
 			.andExpect(status().isCreated())
 			.andExpect(jsonPath("$.userId").value(1L))
 			.andExpect(jsonPath("$.email").value(request.email()))
-			.andExpect(jsonPath("$.nickname").value(request.nickname()));
+			.andExpect(jsonPath("$.name").value(request.name()))
+			.andExpect(jsonPath("$.phone").value(request.phone()))
+			.andExpect(jsonPath("$.role").value("VIEWER"))
+			.andExpect(jsonPath("$.plantId").value(1L))
+			.andExpect(jsonPath("$.status").value("ACTIVE"))
+			.andExpect(jsonPath("$.password").doesNotExist())
+			.andExpect(jsonPath("$.passwordHash").doesNotExist());
 	}
 
 	@Test
 	void signupReturnsValidationErrorWhenEmailIsInvalid() throws Exception {
-		SignupRequest request = new SignupRequest("invalid-email", "password1234!", "tester");
+		SignupRequest request = new SignupRequest("invalid-email", "password1234!", "tester", "010-0000-0000", 1L);
 
 		mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -73,7 +79,7 @@ class AuthControllerTest {
 
 	@Test
 	void signupReturnsValidationErrorWhenPasswordIsTooShort() throws Exception {
-		SignupRequest request = new SignupRequest("new-user@example.com", "1234", "tester");
+		SignupRequest request = new SignupRequest("new-user@example.com", "1234", "tester", "010-0000-0000", 1L);
 
 		mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -83,8 +89,8 @@ class AuthControllerTest {
 	}
 
 	@Test
-	void signupReturnsValidationErrorWhenNicknameIsBlank() throws Exception {
-		SignupRequest request = new SignupRequest("new-user@example.com", "password1234!", "");
+	void signupReturnsValidationErrorWhenNameIsBlank() throws Exception {
+		SignupRequest request = new SignupRequest("new-user@example.com", "password1234!", "", "010-0000-0000", 1L);
 
 		mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -97,7 +103,7 @@ class AuthControllerTest {
 	void loginReturnsOkStatus() throws Exception {
 		LoginRequest request = new LoginRequest("login@example.com", "password1234!");
 		given(authService.login(any(LoginRequest.class)))
-			.willReturn(new LoginResponse(1L, request.email(), "tester", "access-token", "refresh-token"));
+			.willReturn(new LoginResponse(1L, request.email(), "tester", "VIEWER", 1L, "access-token", "refresh-token"));
 
 		mockMvc.perform(post("/api/auth/login")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -105,7 +111,9 @@ class AuthControllerTest {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.userId").value(1L))
 			.andExpect(jsonPath("$.email").value(request.email()))
-			.andExpect(jsonPath("$.nickname").value("tester"))
+			.andExpect(jsonPath("$.name").value("tester"))
+			.andExpect(jsonPath("$.role").value("VIEWER"))
+			.andExpect(jsonPath("$.plantId").value(1L))
 			.andExpect(jsonPath("$.accessToken").value("access-token"))
 			.andExpect(jsonPath("$.refreshToken").value("refresh-token"));
 	}

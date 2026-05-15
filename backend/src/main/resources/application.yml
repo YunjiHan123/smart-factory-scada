@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: scada
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:backend/.env[.properties]
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+jwt:
+  secret: ${JWT_SECRET}
+  access-token-expiration-ms: ${JWT_ACCESS_TOKEN_EXPIRATION_MS}
+  refresh-token-expiration-ms: ${JWT_REFRESH_TOKEN_EXPIRATION_MS}
+
+mybatis:
+  mapper-locations: classpath:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+mqtt:
+  broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
+  client-id: ${MQTT_CLIENT_ID:scada-backend}
+  topic: ${MQTT_TOPIC:scada/team5/plant/+/facility/+/energy}
+
+energy:
+  summary:
+    daily-cron: ${ENERGY_SUMMARY_DAILY_CRON:0 10 0 * * *}
+    monthly-cron: ${ENERGY_SUMMARY_MONTHLY_CRON:0 30 0 1 * *}

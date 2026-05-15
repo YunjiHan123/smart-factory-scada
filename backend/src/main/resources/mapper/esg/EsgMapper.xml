@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.esg.mapper.EsgMapper">
+    <resultMap id="EsgScoreResultMap" type="com.smartfactory.scada.esg.domain.EsgScore">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="targetMonth" column="target_month"/>
+        <result property="electricityScore" column="electricity_score"/>
+        <result property="gasScore" column="gas_score"/>
+        <result property="waterScore" column="water_score"/>
+        <result property="solarScore" column="solar_score"/>
+        <result property="peakScore" column="peak_score"/>
+        <result property="carbonScore" column="carbon_score"/>
+        <result property="totalScore" column="total_score"/>
+        <result property="grade" column="grade"/>
+    </resultMap>
+
+    <select id="findScores" resultMap="EsgScoreResultMap">
+        SELECT
+            es.id,
+            es.plant_id,
+            p.name AS plant_name,
+            es.target_month,
+            es.electricity_score,
+            es.gas_score,
+            es.water_score,
+            es.solar_score,
+            es.peak_score,
+            es.carbon_score,
+            es.total_score,
+            es.grade
+        FROM esg_scores es
+        JOIN plants p ON p.id = es.plant_id
+        <where>
+            <if test="targetMonth != null">AND es.target_month = #{targetMonth}</if>
+        </where>
+        ORDER BY es.target_month DESC, es.total_score DESC, es.id DESC
+    </select>
+
+    <select id="findLatestByPlantId" resultMap="EsgScoreResultMap">
+        SELECT
+            es.id,
+            es.plant_id,
+            p.name AS plant_name,
+            es.target_month,
+            es.electricity_score,
+            es.gas_score,
+            es.water_score,
+            es.solar_score,
+            es.peak_score,
+            es.carbon_score,
+            es.total_score,
+            es.grade
+        FROM esg_scores es
+        JOIN plants p ON p.id = es.plant_id
+        WHERE es.plant_id = #{plantId}
+        ORDER BY es.target_month DESC, es.id DESC
+        LIMIT 1
+    </select>
+</mapper>
