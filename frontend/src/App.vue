@@ -450,7 +450,7 @@ onUnmounted(() => {
       </label>
       <label>
         수집 기준
-        <input value="Redis 최신값 + DB 요약" readonly />
+        <input value="DB 최신값 + DB 요약" readonly />
       </label>
       <button class="primary-button compact" type="button" @click="refreshData">새로고침</button>
     </section>

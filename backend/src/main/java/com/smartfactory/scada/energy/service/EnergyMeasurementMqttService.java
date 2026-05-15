@@ -16,12 +16,11 @@ import lombok.extern.slf4j.Slf4j;
 public class EnergyMeasurementMqttService {
 
 	private final ObjectMapper objectMapper;
-	private final EnergyMeasurementRedisService energyMeasurementRedisService;
+	private final EnergyService energyService;
 	private final EnergyRealtimeWebSocketHandler energyRealtimeWebSocketHandler;
 
 	public void handleMessage(String topic, String payload) {
 		try {
-			// Convert the MQTT JSON payload and immediately refresh the latest Redis cache.
 			EnergyMeasurementMessage message = objectMapper.readValue(payload, EnergyMeasurementMessage.class);
 
 			log.info(
@@ -32,7 +31,7 @@ public class EnergyMeasurementMqttService {
 				message.getMeasuredAt()
 			);
 
-			energyMeasurementRedisService.saveLatest(message);
+			energyService.saveMeasurement(message);
 			energyRealtimeWebSocketHandler.broadcast(message);
 		}
 		catch (JsonProcessingException exception) {
