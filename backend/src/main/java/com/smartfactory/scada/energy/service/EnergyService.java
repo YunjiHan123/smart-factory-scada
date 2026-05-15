@@ -32,6 +32,9 @@ import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
 import com.smartfactory.scada.energy.dto.PeakPowerMetricResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
+import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
+import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
+import com.smartfactory.scada.energy.dto.UtilityUsageMetricResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.Facility;
 import com.smartfactory.scada.facility.mapper.FacilityMapper;
@@ -147,6 +150,49 @@ public class EnergyService {
 	}
 
 	@Transactional(readOnly = true)
+	public UtilityUsageDashboardResponse getUtilityDashboard(Long plantId, LocalDate targetDate) {
+		if (plantId == null) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
+		LocalDateTime from = resolvedDate.atStartOfDay();
+		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
+		LocalDateTime yesterdayFrom = resolvedDate.minusDays(1).atStartOfDay();
+		LocalDateTime patternFrom = resolvedDate.minusDays(6).atStartOfDay();
+
+		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, from, to);
+		List<UtilityHourlyUsage> yesterdayHourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, yesterdayFrom, from);
+		EnergyMeasurement latestUtilityMeasurement = energyMapper.findLatestPlantUtilityMeasurement(plantId, from, to)
+			.orElse(null);
+
+		BigDecimal gasUsage = sumGasUsage(hourlyUsage);
+		BigDecimal waterUsage = sumWaterUsage(hourlyUsage);
+		BigDecimal yesterdayGasUsage = sumGasUsage(yesterdayHourlyUsage);
+		BigDecimal yesterdayWaterUsage = sumWaterUsage(yesterdayHourlyUsage);
+		BigDecimal gasTotal = latestUtilityMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestUtilityMeasurement.getGasM3());
+		BigDecimal waterTotal = latestUtilityMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestUtilityMeasurement.getWaterTon());
+
+		UtilityUsageMetricResponse metrics = new UtilityUsageMetricResponse(
+			gasUsage,
+			gasTotal,
+			changeRate(gasUsage, yesterdayGasUsage),
+			waterUsage,
+			waterTotal,
+			changeRate(waterUsage, yesterdayWaterUsage)
+		);
+
+		return new UtilityUsageDashboardResponse(
+			plantId,
+			resolvedDate,
+			metrics,
+			hourlyUsage,
+			energyMapper.findUtilityMeterStatuses(plantId, from, to),
+			energyMapper.findUtilityDailyUsagePatterns(plantId, patternFrom, to)
+		);
+	}
+
+	@Transactional(readOnly = true)
 	public EnergyFacilityDetailResponse getFacilityDetail(
 		Long plantId,
 		Long facilityId,
@@ -158,7 +204,9 @@ public class EnergyService {
 		LocalDate resolvedTo = to == null ? LocalDate.now() : to;
 		LocalDate resolvedFrom = from == null ? resolvedTo.minusDays(6) : from;
 		if (resolvedFrom.isAfter(resolvedTo)) {
-			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+			LocalDate previousFrom = resolvedFrom;
+			resolvedFrom = resolvedTo;
+			resolvedTo = previousFrom;
 		}
 
 		Facility facility = facilityMapper.findById(facilityId)
@@ -190,10 +238,11 @@ public class EnergyService {
 				summary -> summary,
 				(left, right) -> right
 			));
+		LocalDate currentDate = resolvedTo;
 
 		List<EnergyUsagePointResponse> chart = resolvedFrom.datesUntil(resolvedTo.plusDays(1))
 			.map(date -> {
-				EnergySummary summary = summaryForDate(date, resolvedTo, summariesByDate, measurementSumsByDate);
+				EnergySummary summary = summaryForDate(date, currentDate, summariesByDate, measurementSumsByDate);
 				return new EnergyUsagePointResponse(
 					date,
 					summary == null ? date.atStartOfDay() : summary.getSummaryAt(),
@@ -303,6 +352,20 @@ public class EnergyService {
 
 	private BigDecimal zeroIfNull(BigDecimal value) {
 		return value == null ? BigDecimal.ZERO : value;
+	}
+
+	private BigDecimal sumGasUsage(List<UtilityHourlyUsage> hourlyUsage) {
+		return hourlyUsage.stream()
+			.map(UtilityHourlyUsage::getGasUsageM3)
+			.map(this::zeroIfNull)
+			.reduce(BigDecimal.ZERO, BigDecimal::add);
+	}
+
+	private BigDecimal sumWaterUsage(List<UtilityHourlyUsage> hourlyUsage) {
+		return hourlyUsage.stream()
+			.map(UtilityHourlyUsage::getWaterUsageTon)
+			.map(this::zeroIfNull)
+			.reduce(BigDecimal.ZERO, BigDecimal::add);
 	}
 
 	private BigDecimal peakThresholdForPlant(Long plantId) {

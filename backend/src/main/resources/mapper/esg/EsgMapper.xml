@@ -19,6 +19,23 @@
         <result property="grade" column="grade"/>
     </resultMap>
 
+    <resultMap id="EsgEnergyAggregateResultMap" type="com.smartfactory.scada.esg.domain.EsgEnergyAggregate">
+        <id property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="latitude" column="latitude"/>
+        <result property="longitude" column="longitude"/>
+        <result property="facilityCount" column="facility_count"/>
+        <result property="measurementCount" column="measurement_count"/>
+        <result property="latestMeasuredAt" column="latest_measured_at"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+        <result property="currentPeakKw" column="current_peak_kw"/>
+        <result property="maxPeakKw" column="max_peak_kw"/>
+        <result property="intervalMaxPeakKw" column="interval_max_peak_kw"/>
+    </resultMap>
+
     <select id="findScores" resultMap="EsgScoreResultMap">
         SELECT
             es.id,
@@ -60,5 +77,123 @@
         WHERE es.plant_id = #{plantId}
         ORDER BY es.target_month DESC, es.id DESC
         LIMIT 1
+    </select>
+
+    <select id="findEnvironmentAggregates" resultMap="EsgEnergyAggregateResultMap">
+        WITH filtered_measurements AS (
+            SELECT
+                em.id,
+                em.plant_id,
+                em.facility_id,
+                em.measured_at,
+                em.electricity_kwh,
+                em.gas_m3,
+                em.water_ton,
+                em.solar_kwh,
+                em.peak_kw
+            FROM energy_measurements em
+            WHERE em.measured_at &gt;= #{from}
+              AND em.measured_at &lt; #{to}
+              <if test="plantId != null">AND em.plant_id = #{plantId}</if>
+        ),
+        usage_by_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                COUNT(*) AS measurement_count,
+                MAX(measured_at) AS latest_measured_at,
+                GREATEST(COALESCE(MAX(electricity_kwh) - MIN(electricity_kwh), 0), 0) AS electricity_kwh,
+                GREATEST(COALESCE(MAX(gas_m3) - MIN(gas_m3), 0), 0) AS gas_m3,
+                GREATEST(COALESCE(MAX(water_ton) - MIN(water_ton), 0), 0) AS water_ton,
+                GREATEST(COALESCE(MAX(solar_kwh) - MIN(solar_kwh), 0), 0) AS solar_kwh,
+                COALESCE(MAX(peak_kw), 0) AS max_peak_kw
+            FROM filtered_measurements
+            GROUP BY plant_id, facility_id
+        ),
+        usage_by_plant AS (
+            SELECT
+                plant_id,
+                SUM(measurement_count) AS measurement_count,
+                MAX(latest_measured_at) AS latest_measured_at,
+                ROUND(COALESCE(SUM(electricity_kwh), 0), 2) AS electricity_kwh,
+                ROUND(COALESCE(SUM(gas_m3), 0), 2) AS gas_m3,
+                ROUND(COALESCE(SUM(water_ton), 0), 2) AS water_ton,
+                ROUND(COALESCE(SUM(solar_kwh), 0), 2) AS solar_kwh,
+                ROUND(COALESCE(MAX(max_peak_kw), 0), 2) AS max_peak_kw
+            FROM usage_by_facility
+            GROUP BY plant_id
+        ),
+        latest_measurements AS (
+            SELECT fm.*
+            FROM filtered_measurements fm
+            JOIN (
+                SELECT plant_id, facility_id, MAX(measured_at) AS measured_at
+                FROM filtered_measurements
+                GROUP BY plant_id, facility_id
+            ) latest
+              ON latest.plant_id = fm.plant_id
+             AND latest.facility_id = fm.facility_id
+             AND latest.measured_at = fm.measured_at
+        ),
+        current_peak AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(SUM(peak_kw), 0), 2) AS current_peak_kw
+            FROM latest_measurements
+            GROUP BY plant_id
+        ),
+        bucket_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_bucket,
+                MAX(peak_kw) AS max_kw
+            FROM filtered_measurements
+            WHERE peak_kw IS NOT NULL
+            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
+        ),
+        bucket_plant AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(MAX(bucket_peak_kw), 0), 2) AS interval_max_peak_kw
+            FROM (
+                SELECT
+                    plant_id,
+                    measured_bucket,
+                    SUM(max_kw) AS bucket_peak_kw
+                FROM bucket_facility
+                GROUP BY plant_id, measured_bucket
+            ) bucket_sum
+            GROUP BY plant_id
+        ),
+        facility_counts AS (
+            SELECT plant_id, COUNT(*) AS facility_count
+            FROM facilities
+            GROUP BY plant_id
+        )
+        SELECT
+            p.id AS plant_id,
+            p.name AS plant_name,
+            p.latitude,
+            p.longitude,
+            COALESCE(fc.facility_count, 0) AS facility_count,
+            COALESCE(ubp.measurement_count, 0) AS measurement_count,
+            ubp.latest_measured_at,
+            COALESCE(ubp.electricity_kwh, 0) AS electricity_kwh,
+            COALESCE(ubp.gas_m3, 0) AS gas_m3,
+            COALESCE(ubp.water_ton, 0) AS water_ton,
+            COALESCE(ubp.solar_kwh, 0) AS solar_kwh,
+            COALESCE(cp.current_peak_kw, 0) AS current_peak_kw,
+            COALESCE(ubp.max_peak_kw, 0) AS max_peak_kw,
+            COALESCE(bp.interval_max_peak_kw, 0) AS interval_max_peak_kw
+        FROM plants p
+        LEFT JOIN facility_counts fc ON fc.plant_id = p.id
+        LEFT JOIN usage_by_plant ubp ON ubp.plant_id = p.id
+        LEFT JOIN current_peak cp ON cp.plant_id = p.id
+        LEFT JOIN bucket_plant bp ON bp.plant_id = p.id
+        <where>
+            <if test="plantId != null">AND p.id = #{plantId}</if>
+        </where>
+        ORDER BY p.name ASC
     </select>
 </mapper>

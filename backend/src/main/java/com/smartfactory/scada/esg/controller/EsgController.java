@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.smartfactory.scada.esg.dto.EsgScoreResponse;
+import com.smartfactory.scada.esg.dto.EsgEnvironmentDashboardResponse;
 import com.smartfactory.scada.esg.service.EsgService;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -34,5 +35,14 @@ public class EsgController {
 	@GetMapping("/scores/plants/{plantId}/latest")
 	public EsgScoreResponse getLatestScore(@PathVariable Long plantId) {
 		return esgService.getLatestScore(plantId);
+	}
+
+	@GetMapping("/environment-dashboard")
+	public EsgEnvironmentDashboardResponse getEnvironmentDashboard(
+		@RequestParam(required = false) Long plantId,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
+	) {
+		return esgService.getEnvironmentDashboard(plantId, from, to);
 	}
 }

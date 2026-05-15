@@ -18,6 +18,7 @@ import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerDashboardResponse;
+import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
 import com.smartfactory.scada.energy.service.EnergyService;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -70,6 +71,14 @@ public class EnergyMeasurementController {
 		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
 	) {
 		return energyService.getPeakDashboard(plantId, date);
+	}
+
+	@GetMapping("/utility-dashboard")
+	public UtilityUsageDashboardResponse getUtilityDashboard(
+		@RequestParam Long plantId,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+	) {
+		return energyService.getUtilityDashboard(plantId, date);
 	}
 
 	@GetMapping("/latest/plants/{plantId}/facilities/{facilityId}")

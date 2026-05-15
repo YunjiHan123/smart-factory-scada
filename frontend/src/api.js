@@ -54,7 +54,9 @@ export async function apiFetch(path, options = {}) {
 
   if (!response.ok) {
     const message = typeof body === 'string' ? body : body.message || body.error || 'API 요청에 실패했습니다.'
-    throw new Error(message)
+    const error = new Error(message)
+    error.status = response.status
+    throw error
   }
 
   return body
@@ -75,9 +77,11 @@ export const api = {
   energyMeasurements: (params) => apiFetch(`/api/energy/measurements${toQuery(params)}`),
   energyFacilityDetail: (params) => apiFetch(`/api/energy/facility-detail${toQuery(params)}`),
   peakDashboard: (params) => apiFetch(`/api/energy/peak-dashboard${toQuery(params)}`),
+  utilityDashboard: (params) => apiFetch(`/api/energy/utility-dashboard${toQuery(params)}`),
   latestEnergy: (plantId, facilityId) => apiFetch(`/api/energy/latest/plants/${plantId}/facilities/${facilityId}`),
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),
   resolveAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}/resolve`, { method: 'PATCH' }),
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
+  esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),
 }
