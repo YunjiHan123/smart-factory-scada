@@ -1,20 +1,35 @@
 package com.smartfactory.scada.energy.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.LocalTime;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.smartfactory.scada.common.exception.BusinessException;
+import com.smartfactory.scada.common.exception.CommonErrorCode;
 import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.EnergyType;
+import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
+import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsageLogResponse;
+import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsagePointResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
+import com.smartfactory.scada.facility.domain.Facility;
+import com.smartfactory.scada.facility.mapper.FacilityMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -26,6 +41,7 @@ public class EnergyService {
 	private static final int MAX_LIMIT = 500;
 
 	private final EnergyMapper energyMapper;
+	private final FacilityMapper facilityMapper;
 
 	@Transactional
 	public void saveMeasurement(EnergyMeasurementMessage message) {
@@ -77,6 +93,91 @@ public class EnergyService {
 			.map(EnergyMeasurementResponse::from);
 	}
 
+	@Transactional(readOnly = true)
+	public EnergyFacilityDetailResponse getFacilityDetail(
+		Long plantId,
+		Long facilityId,
+		EnergyType energyType,
+		LocalDate from,
+		LocalDate to
+	) {
+		EnergyType resolvedEnergyType = energyType == null ? EnergyType.ELECTRICITY : energyType;
+		LocalDate resolvedTo = to == null ? LocalDate.now() : to;
+		LocalDate resolvedFrom = from == null ? resolvedTo.minusDays(6) : from;
+		if (resolvedFrom.isAfter(resolvedTo)) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		Facility facility = facilityMapper.findById(facilityId)
+			.filter(foundFacility -> foundFacility.getPlantId().equals(plantId))
+			.orElseThrow(() -> new BusinessException(CommonErrorCode.VALIDATION_ERROR));
+
+		List<EnergySummary> summaries = energyMapper.findSummaries(
+			plantId,
+			facilityId,
+			SummaryType.DAILY,
+			resolvedFrom.atStartOfDay(),
+			resolvedTo.atTime(LocalTime.MAX)
+		);
+		Map<LocalDate, EnergySummary> summariesByDate = summaries.stream()
+			.collect(Collectors.toMap(
+				summary -> summary.getSummaryAt().toLocalDate(),
+				summary -> summary,
+				(left, right) -> right
+			));
+
+		List<EnergyUsagePointResponse> chart = resolvedFrom.datesUntil(resolvedTo.plusDays(1))
+			.map(date -> {
+				EnergySummary summary = summariesByDate.get(date);
+				return new EnergyUsagePointResponse(
+					date,
+					summary == null ? date.atStartOfDay() : summary.getSummaryAt(),
+					usageOf(resolvedEnergyType, summary)
+				);
+			})
+			.toList();
+
+		List<EnergyUsageLogResponse> logs = chart.stream()
+			.sorted(Comparator.comparing(EnergyUsagePointResponse::date).reversed())
+			.map(point -> {
+				BigDecimal previousUsage = usageByDate(chart, point.date().minusDays(1));
+				return new EnergyUsageLogResponse(
+					point.summaryAt(),
+					point.usage(),
+					point.usage().subtract(previousUsage),
+					changeRate(point.usage(), previousUsage)
+				);
+			})
+			.toList();
+
+		BigDecimal todayUsage = usageByDate(chart, resolvedTo);
+		BigDecimal yesterdayUsage = usageByDate(chart, resolvedTo.minusDays(1));
+		LocalDateTime latestMeasuredAt = energyMapper.findLatestMeasurement(plantId, facilityId)
+			.map(EnergyMeasurement::getMeasuredAt)
+			.orElseGet(() -> chart.stream()
+				.filter(point -> point.usage().compareTo(BigDecimal.ZERO) > 0)
+				.reduce((previous, current) -> current)
+				.map(EnergyUsagePointResponse::summaryAt)
+				.orElse(null));
+
+		return new EnergyFacilityDetailResponse(
+			plantId,
+			facilityId,
+			facility.getName(),
+			facility.getFacilityType(),
+			facility.getStatus(),
+			resolvedEnergyType,
+			resolvedEnergyType.unit(),
+			todayUsage,
+			yesterdayUsage,
+			todayUsage.subtract(yesterdayUsage),
+			changeRate(todayUsage, yesterdayUsage),
+			latestMeasuredAt,
+			chart,
+			logs
+		);
+	}
+
 	private int normalizeLimit(Integer limit) {
 		if (limit == null || limit <= 0) {
 			return DEFAULT_LIMIT;
@@ -86,6 +187,31 @@ public class EnergyService {
 
 	private BigDecimal toBigDecimal(Double value) {
 		return value == null ? null : BigDecimal.valueOf(value);
+	}
+
+	private BigDecimal usageOf(EnergyType energyType, EnergySummary summary) {
+		if (summary == null) {
+			return BigDecimal.ZERO;
+		}
+		BigDecimal usage = energyType.usage(summary);
+		return usage == null ? BigDecimal.ZERO : usage;
+	}
+
+	private BigDecimal usageByDate(List<EnergyUsagePointResponse> chart, LocalDate date) {
+		return chart.stream()
+			.filter(point -> point.date().equals(date))
+			.findFirst()
+			.map(EnergyUsagePointResponse::usage)
+			.orElse(BigDecimal.ZERO);
+	}
+
+	private BigDecimal changeRate(BigDecimal currentUsage, BigDecimal previousUsage) {
+		if (previousUsage == null || previousUsage.compareTo(BigDecimal.ZERO) == 0) {
+			return BigDecimal.ZERO;
+		}
+		return currentUsage.subtract(previousUsage)
+			.multiply(BigDecimal.valueOf(100))
+			.divide(previousUsage, 1, RoundingMode.HALF_UP);
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {
