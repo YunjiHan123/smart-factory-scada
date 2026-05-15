@@ -64,9 +64,8 @@ public class EsgService {
 
 		LocalDateTime fromDateTime = resolvedFrom.atStartOfDay();
 		LocalDateTime toDateTime = resolvedTo.plusDays(1).atStartOfDay();
-		List<EsgEnergyAggregate> current = esgMapper.findEnvironmentAggregates(null, fromDateTime, toDateTime);
-		List<EsgEnergyAggregate> previous = esgMapper.findEnvironmentAggregates(
-			null,
+		List<EsgEnergyAggregate> current = environmentAggregates(fromDateTime, toDateTime);
+		List<EsgEnergyAggregate> previous = environmentAggregates(
 			resolvedFrom.minusMonths(1).atStartOfDay(),
 			resolvedTo.minusMonths(1).plusDays(1).atStartOfDay()
 		);
@@ -91,6 +90,10 @@ public class EsgService {
 				"9.0 이상 AAA, 8.0 AA, 7.0 A, 6.0 BBB, 5.0 BB, 4.0 B, 그 외 CCC입니다."
 			)
 		);
+	}
+
+	private List<EsgEnergyAggregate> environmentAggregates(LocalDateTime from, LocalDateTime to) {
+		return esgMapper.findEnvironmentAggregatesFromSummaries(null, from, to);
 	}
 
 	private List<EsgEnvironmentPlantResponse> rankPlants(

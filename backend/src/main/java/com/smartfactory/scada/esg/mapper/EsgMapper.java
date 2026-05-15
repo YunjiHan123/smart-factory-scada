@@ -1,6 +1,7 @@
 package com.smartfactory.scada.esg.mapper;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,7 +20,13 @@ public interface EsgMapper {
 
 	List<EsgEnergyAggregate> findEnvironmentAggregates(
 		@Param("plantId") Long plantId,
-		@Param("from") java.time.LocalDateTime from,
-		@Param("to") java.time.LocalDateTime to
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<EsgEnergyAggregate> findEnvironmentAggregatesFromSummaries(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
 	);
 }

@@ -196,4 +196,96 @@
         </where>
         ORDER BY p.name ASC
     </select>
+
+    <select id="findEnvironmentAggregatesFromSummaries" resultMap="EsgEnergyAggregateResultMap">
+        WITH usage_by_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                SUM(measurement_count) AS measurement_count,
+                MAX(last_measured_at) AS latest_measured_at,
+                ROUND(COALESCE(SUM(electricity_usage_kwh), 0), 2) AS electricity_kwh,
+                ROUND(COALESCE(SUM(gas_usage_m3), 0), 2) AS gas_m3,
+                ROUND(COALESCE(SUM(water_usage_ton), 0), 2) AS water_ton,
+                ROUND(COALESCE(SUM(solar_usage_kwh), 0), 2) AS solar_kwh,
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS max_peak_kw
+            FROM energy_interval_summaries
+            WHERE bucket_type = 'DAILY'
+              AND bucket_at &gt;= #{from}
+              AND bucket_at &lt; #{to}
+              <if test="plantId != null">AND plant_id = #{plantId}</if>
+            GROUP BY plant_id, facility_id
+        ),
+        usage_by_plant AS (
+            SELECT
+                plant_id,
+                SUM(measurement_count) AS measurement_count,
+                MAX(latest_measured_at) AS latest_measured_at,
+                ROUND(COALESCE(SUM(electricity_kwh), 0), 2) AS electricity_kwh,
+                ROUND(COALESCE(SUM(gas_m3), 0), 2) AS gas_m3,
+                ROUND(COALESCE(SUM(water_ton), 0), 2) AS water_ton,
+                ROUND(COALESCE(SUM(solar_kwh), 0), 2) AS solar_kwh,
+                ROUND(COALESCE(MAX(max_peak_kw), 0), 2) AS max_peak_kw
+            FROM usage_by_facility
+            GROUP BY plant_id
+        ),
+        current_peak AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(SUM(peak_kw), 0), 2) AS current_peak_kw
+            FROM energy_latest_measurements
+            WHERE measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              <if test="plantId != null">AND plant_id = #{plantId}</if>
+            GROUP BY plant_id
+        ),
+        bucket_peak AS (
+            SELECT
+                plant_id,
+                bucket_at,
+                SUM(peak_kw) AS bucket_peak_kw
+            FROM energy_interval_summaries
+            WHERE bucket_type = 'FIFTEEN_MINUTES'
+              AND bucket_at &gt;= #{from}
+              AND bucket_at &lt; #{to}
+              <if test="plantId != null">AND plant_id = #{plantId}</if>
+            GROUP BY plant_id, bucket_at
+        ),
+        interval_peak AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(MAX(bucket_peak_kw), 0), 2) AS interval_max_peak_kw
+            FROM bucket_peak
+            GROUP BY plant_id
+        ),
+        facility_counts AS (
+            SELECT plant_id, COUNT(*) AS facility_count
+            FROM facilities
+            GROUP BY plant_id
+        )
+        SELECT
+            p.id AS plant_id,
+            p.name AS plant_name,
+            p.latitude,
+            p.longitude,
+            COALESCE(fc.facility_count, 0) AS facility_count,
+            COALESCE(ubp.measurement_count, 0) AS measurement_count,
+            ubp.latest_measured_at,
+            COALESCE(ubp.electricity_kwh, 0) AS electricity_kwh,
+            COALESCE(ubp.gas_m3, 0) AS gas_m3,
+            COALESCE(ubp.water_ton, 0) AS water_ton,
+            COALESCE(ubp.solar_kwh, 0) AS solar_kwh,
+            COALESCE(cp.current_peak_kw, 0) AS current_peak_kw,
+            COALESCE(ubp.max_peak_kw, 0) AS max_peak_kw,
+            COALESCE(ip.interval_max_peak_kw, 0) AS interval_max_peak_kw
+        FROM plants p
+        LEFT JOIN facility_counts fc ON fc.plant_id = p.id
+        LEFT JOIN usage_by_plant ubp ON ubp.plant_id = p.id
+        LEFT JOIN current_peak cp ON cp.plant_id = p.id
+        LEFT JOIN interval_peak ip ON ip.plant_id = p.id
+        <where>
+            <if test="plantId != null">AND p.id = #{plantId}</if>
+        </where>
+        ORDER BY p.name ASC
+    </select>
 </mapper>

@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -33,8 +34,10 @@ import com.smartfactory.scada.energy.dto.PeakPowerHistory;
 import com.smartfactory.scada.energy.dto.PeakPowerMetricResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
+import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
 import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
 import com.smartfactory.scada.energy.dto.UtilityUsageMetricResponse;
+import com.smartfactory.scada.energy.dto.UtilityUsagePattern;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.Facility;
 import com.smartfactory.scada.facility.mapper.FacilityMapper;
@@ -64,7 +67,13 @@ public class EnergyService {
 		measurement.setSolarKwh(toBigDecimal(message.getSolarKwh()));
 		measurement.setPeakKw(toBigDecimal(message.getPeakKw()));
 
+		EnergyMeasurement previousMeasurement = energyMapper
+			.findLatestStoredMeasurement(measurement.getPlantId(), measurement.getFacilityId())
+			.or(() -> energyMapper.findLatestMeasurement(measurement.getPlantId(), measurement.getFacilityId()))
+			.orElse(null);
+
 		energyMapper.insertMeasurement(measurement);
+		upsertRealtimeAggregates(measurement, previousMeasurement);
 	}
 
 	@Transactional(readOnly = true)
@@ -113,17 +122,19 @@ public class EnergyService {
 		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
 		BigDecimal thresholdKw = peakThresholdForPlant(plantId);
 
-		List<PeakPowerTrendPoint> trend = energyMapper.findPeakPowerTrend(plantId, from, to);
-		List<PeakPowerFacilityRanking> ranking = energyMapper.findPeakPowerFacilityRanking(plantId, from, to, 5);
-		List<PeakPowerHistory> history = energyMapper.findPeakPowerHistory(
-			plantId,
-			from,
-			to,
-			thresholdKw,
-			10
-		);
+		List<PeakPowerTrendPoint> trend = energyMapper.findIntervalPeakPowerTrend(plantId, from, to);
+		if (trend.isEmpty()) {
+			trend = energyMapper.findPeakPowerTrend(plantId, from, to);
+		}
+		List<PeakPowerFacilityRanking> ranking = energyMapper.findIntervalPeakPowerFacilityRanking(plantId, from, to, 5);
+		if (ranking.isEmpty()) {
+			ranking = energyMapper.findPeakPowerFacilityRanking(plantId, from, to, 5);
+		}
+		List<PeakPowerHistory> history = peakHistoryFromTrend(trend, thresholdKw, 10);
 
-		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
+		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurementFromLatest(plantId, from, to)
+			.or(() -> energyMapper.findLatestPlantMeasurement(plantId, from, to))
+			.orElse(null);
 		PeakPowerTrendPoint latestInterval = trend.isEmpty() ? null : trend.get(trend.size() - 1);
 		BigDecimal currentKw = latestMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestMeasurement.getPeakKw());
 		BigDecimal intervalAverageKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getAverageKw());
@@ -161,9 +172,16 @@ public class EnergyService {
 		LocalDateTime yesterdayFrom = resolvedDate.minusDays(1).atStartOfDay();
 		LocalDateTime patternFrom = resolvedDate.minusDays(6).atStartOfDay();
 
-		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, from, to);
-		List<UtilityHourlyUsage> yesterdayHourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, yesterdayFrom, from);
-		EnergyMeasurement latestUtilityMeasurement = energyMapper.findLatestPlantUtilityMeasurement(plantId, from, to)
+		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findIntervalUtilityHourlyUsage(plantId, from, to);
+		if (hourlyUsage.isEmpty()) {
+			hourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, from, to);
+		}
+		List<UtilityHourlyUsage> yesterdayHourlyUsage = energyMapper.findIntervalUtilityHourlyUsage(plantId, yesterdayFrom, from);
+		if (yesterdayHourlyUsage.isEmpty()) {
+			yesterdayHourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, yesterdayFrom, from);
+		}
+		EnergyMeasurement latestUtilityMeasurement = energyMapper.findLatestPlantUtilityMeasurementFromLatest(plantId, from, to)
+			.or(() -> energyMapper.findLatestPlantUtilityMeasurement(plantId, from, to))
 			.orElse(null);
 
 		BigDecimal gasUsage = sumGasUsage(hourlyUsage);
@@ -187,8 +205,8 @@ public class EnergyService {
 			resolvedDate,
 			metrics,
 			hourlyUsage,
-			energyMapper.findUtilityMeterStatuses(plantId, from, to),
-			energyMapper.findUtilityDailyUsagePatterns(plantId, patternFrom, to)
+			meterStatuses(plantId, from, to),
+			utilityPatterns(plantId, patternFrom, to)
 		);
 	}
 
@@ -299,6 +317,113 @@ public class EnergyService {
 		return Math.min(limit, MAX_LIMIT);
 	}
 
+	private void upsertRealtimeAggregates(EnergyMeasurement measurement, EnergyMeasurement previousMeasurement) {
+		energyMapper.upsertLatestMeasurement(measurement);
+
+		BigDecimal electricityUsageKwh = delta(
+			measurement.getElectricityKwh(),
+			previousMeasurement == null ? null : previousMeasurement.getElectricityKwh()
+		);
+		BigDecimal gasUsageM3 = delta(
+			measurement.getGasM3(),
+			previousMeasurement == null ? null : previousMeasurement.getGasM3()
+		);
+		BigDecimal waterUsageTon = delta(
+			measurement.getWaterTon(),
+			previousMeasurement == null ? null : previousMeasurement.getWaterTon()
+		);
+		BigDecimal solarUsageKwh = delta(
+			measurement.getSolarKwh(),
+			previousMeasurement == null ? null : previousMeasurement.getSolarKwh()
+		);
+		BigDecimal peakKw = zeroIfNull(measurement.getPeakKw());
+
+		upsertIntervalSummary(
+			measurement,
+			"FIFTEEN_MINUTES",
+			fifteenMinuteBucket(measurement.getMeasuredAt()),
+			electricityUsageKwh,
+			gasUsageM3,
+			waterUsageTon,
+			solarUsageKwh,
+			peakKw
+		);
+		upsertIntervalSummary(
+			measurement,
+			"HOURLY",
+			measurement.getMeasuredAt().truncatedTo(ChronoUnit.HOURS),
+			electricityUsageKwh,
+			gasUsageM3,
+			waterUsageTon,
+			solarUsageKwh,
+			peakKw
+		);
+		upsertIntervalSummary(
+			measurement,
+			"DAILY",
+			measurement.getMeasuredAt().toLocalDate().atStartOfDay(),
+			electricityUsageKwh,
+			gasUsageM3,
+			waterUsageTon,
+			solarUsageKwh,
+			peakKw
+		);
+	}
+
+	private void upsertIntervalSummary(
+		EnergyMeasurement measurement,
+		String bucketType,
+		LocalDateTime bucketAt,
+		BigDecimal electricityUsageKwh,
+		BigDecimal gasUsageM3,
+		BigDecimal waterUsageTon,
+		BigDecimal solarUsageKwh,
+		BigDecimal peakKw
+	) {
+		energyMapper.upsertIntervalSummary(
+			measurement.getPlantId(),
+			measurement.getFacilityId(),
+			bucketType,
+			bucketAt,
+			electricityUsageKwh,
+			gasUsageM3,
+			waterUsageTon,
+			solarUsageKwh,
+			peakKw,
+			measurement.getMeasuredAt()
+		);
+	}
+
+	private LocalDateTime fifteenMinuteBucket(LocalDateTime measuredAt) {
+		int bucketMinute = measuredAt.getMinute() / 15 * 15;
+		return measuredAt.truncatedTo(ChronoUnit.HOURS).plusMinutes(bucketMinute);
+	}
+
+	private BigDecimal delta(BigDecimal current, BigDecimal previous) {
+		if (current == null || previous == null || current.compareTo(previous) < 0) {
+			return BigDecimal.ZERO;
+		}
+		return current.subtract(previous);
+	}
+
+	private List<UtilityMeterStatus> meterStatuses(Long plantId, LocalDateTime from, LocalDateTime to) {
+		List<UtilityMeterStatus> statuses = energyMapper.findUtilityMeterStatusesFromLatest(plantId, from, to);
+		boolean hasLatestMeasurement = statuses.stream()
+			.anyMatch(status -> status.getLastReceivedAt() != null);
+		if (hasLatestMeasurement) {
+			return statuses;
+		}
+		return energyMapper.findUtilityMeterStatuses(plantId, from, to);
+	}
+
+	private List<UtilityUsagePattern> utilityPatterns(Long plantId, LocalDateTime from, LocalDateTime to) {
+		List<UtilityUsagePattern> patterns = energyMapper.findIntervalUtilityDailyUsagePatterns(plantId, from, to);
+		if (patterns.isEmpty()) {
+			return energyMapper.findUtilityDailyUsagePatterns(plantId, from, to);
+		}
+		return patterns;
+	}
+
 	private BigDecimal toBigDecimal(Double value) {
 		return value == null ? null : BigDecimal.valueOf(value);
 	}
@@ -348,6 +473,46 @@ public class EnergyService {
 		return zeroIfNull(value)
 			.multiply(BigDecimal.valueOf(100))
 			.divide(baseline, 1, RoundingMode.HALF_UP);
+	}
+
+	private List<PeakPowerHistory> peakHistoryFromTrend(
+		List<PeakPowerTrendPoint> trend,
+		BigDecimal thresholdKw,
+		int limit
+	) {
+		BigDecimal warningThresholdKw = zeroIfNull(thresholdKw).multiply(BigDecimal.valueOf(0.8));
+
+		return trend.stream()
+			.filter(point -> zeroIfNull(point.getMaxKw()).compareTo(warningThresholdKw) >= 0)
+			.sorted((left, right) -> {
+				int peakCompare = zeroIfNull(right.getMaxKw()).compareTo(zeroIfNull(left.getMaxKw()));
+				if (peakCompare != 0) {
+					return peakCompare;
+				}
+				if (left.getMeasuredAt() == null && right.getMeasuredAt() == null) {
+					return 0;
+				}
+				if (left.getMeasuredAt() == null) {
+					return 1;
+				}
+				if (right.getMeasuredAt() == null) {
+					return -1;
+				}
+				return right.getMeasuredAt().compareTo(left.getMeasuredAt());
+			})
+			.limit(limit)
+			.map(point -> {
+				BigDecimal peakKw = zeroIfNull(point.getMaxKw());
+				PeakPowerHistory history = new PeakPowerHistory();
+				history.setMeasuredAt(point.getMeasuredAt());
+				history.setPeakKw(peakKw);
+				history.setPeakUsageRate(rateOf(peakKw, thresholdKw));
+				history.setDurationMinutes(15);
+				history.setThresholdKw(thresholdKw);
+				history.setExceeded(peakKw.compareTo(zeroIfNull(thresholdKw)) > 0);
+				return history;
+			})
+			.toList();
 	}
 
 	private BigDecimal zeroIfNull(BigDecimal value) {
