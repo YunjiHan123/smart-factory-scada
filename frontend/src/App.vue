@@ -36,8 +36,18 @@ const selectedEsgTo = ref(formatDateInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
+let energyPollTimer = null
+let latestEnergyPollInFlight = false
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
+let lastPeakRefreshAt = 0
+let lastUtilityRefreshAt = 0
+const LIVE_SERIES_LIMIT = 120
+const LIVE_STALE_MS = 5000
+const LIVE_POLL_MS = 1000
+const LIVE_DASHBOARD_REFRESH_MS = 10000
+const liveEnergyByFacility = reactive(new Map())
+const liveEnergySeriesByFacility = reactive(new Map())
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -102,26 +112,197 @@ const activeMeta = computed(() => {
   return { title, description }
 })
 
-const selectedPlant = computed(() => state.plants.find((plant) => plant.id === selectedPlantId.value))
-const selectedFacility = computed(() => state.facilities.find((facility) => facility.id === selectedFacilityId.value))
+const selectedPlant = computed(() =>
+  state.plants.find((plant) => Number(plant.id) === Number(selectedPlantId.value)),
+)
+const selectedFacility = computed(() =>
+  state.facilities.find((facility) => Number(facility.id) === Number(selectedFacilityId.value)),
+)
 const latestSummary = computed(() => state.overview?.latestEnergySummary || state.summaries.at(-1) || null)
 const latestEsg = computed(() => state.overview?.latestEsgScore || state.esgScores[0] || null)
 const recentSummaries = computed(() => state.summaries.slice(-8))
-const latestMeasuredAt = computed(() => metricValue(state.latestEnergy, 'measuredAt', 'measured_at'))
+const liveEnergyEntries = computed(() => Array.from(liveEnergyByFacility.values()))
+const selectedFacilityLiveEnergy = computed(() => {
+  if (!selectedPlantId.value || !selectedFacilityId.value) {
+    return null
+  }
+  return liveEnergyByFacility.get(energyKey(selectedPlantId.value, selectedFacilityId.value)) || null
+})
+const selectedPlantLiveEnergy = computed(() => {
+  const plantId = Number(selectedPlantId.value)
+  if (!Number.isFinite(plantId)) {
+    return null
+  }
+
+  const rows = liveEnergyEntries.value.filter((row) => Number(row.plantId) === plantId)
+  if (!rows.length) {
+    return null
+  }
+
+  const latestRow = rows.reduce((latest, row) => {
+    const latestTime = Date.parse(latest?.measuredAt || '')
+    const rowTime = Date.parse(row.measuredAt || '')
+    return rowTime > latestTime ? row : latest
+  }, rows[0])
+
+  return rows.reduce(
+    (sum, row) => ({
+      plantId,
+      facilityId: null,
+      measuredAt: latestRow?.measuredAt || sum.measuredAt,
+      electricityKwh: sum.electricityKwh + metricNumber(row, 'electricityKwh', 'electricity_kwh'),
+      gasM3: sum.gasM3 + metricNumber(row, 'gasM3', 'gas_m3'),
+      waterTon: sum.waterTon + metricNumber(row, 'waterTon', 'water_ton'),
+      solarKwh: sum.solarKwh + metricNumber(row, 'solarKwh', 'solar_kwh'),
+      peakKw: sum.peakKw + metricNumber(row, 'peakKw', 'peak_kw'),
+    }),
+    {
+      plantId,
+      facilityId: null,
+      measuredAt: latestRow?.measuredAt || null,
+      electricityKwh: 0,
+      gasM3: 0,
+      waterTon: 0,
+      solarKwh: 0,
+      peakKw: 0,
+    },
+  )
+})
+const selectedLiveEnergy = computed(() =>
+  selectedFacilityId.value ? selectedFacilityLiveEnergy.value : selectedPlantLiveEnergy.value,
+)
+const liveEnergySource = computed(() => selectedLiveEnergy.value || state.latestEnergy || latestSummary.value || null)
+const liveEnergyFresh = computed(() => {
+  const measuredAt = metricValue(liveEnergySource.value, 'measuredAt', 'measured_at')
+  return measuredAt ? Date.now() - Date.parse(measuredAt) <= LIVE_STALE_MS : false
+})
+const latestMeasuredAt = computed(() => metricValue(liveEnergySource.value, 'measuredAt', 'measured_at'))
 const selectedEnergyMeta = computed(
   () => energyTypeOptions.find((option) => option.value === selectedEnergyType.value) || energyTypeOptions[0],
 )
-const facilityDetailChart = computed(() => state.facilityDetail?.chart || [])
-const facilityDetailLogs = computed(() => state.facilityDetail?.logs || [])
+const facilitySummaryChart = computed(() =>
+  state.summaries.slice(-7).map((summary) => ({
+    date: formatDate(summary.summaryAt),
+    summaryAt: summary.summaryAt,
+    usage: usageValueForEnergyType(summary, selectedEnergyType.value) || 0,
+  })),
+)
+const facilityDetailChart = computed(() =>
+  state.facilityDetail?.chart?.length ? state.facilityDetail.chart : facilitySummaryChart.value,
+)
+const facilityDetailLogs = computed(() => {
+  if (state.facilityDetail?.logs?.length) {
+    return state.facilityDetail.logs
+  }
+
+  return facilityDetailChart.value
+    .map((point, index, rows) => {
+      const previousUsage = Number(rows[index - 1]?.usage || 0)
+      const usage = Number(point.usage || 0)
+      const changeAmount = usage - previousUsage
+      return {
+        measuredAt: point.summaryAt || point.date,
+        usage,
+        changeAmount,
+        changeRate: calculateChangeRate(usage, previousUsage),
+      }
+    })
+    .reverse()
+})
 const facilityDetailMaxUsage = computed(() =>
   Math.max(1, ...facilityDetailChart.value.map((point) => Number(point.usage || 0))),
 )
-const facilityTodayUsage = computed(() => state.facilityDetail?.todayUsage ?? 0)
-const facilityChangeAmount = computed(() => state.facilityDetail?.changeAmount ?? 0)
-const facilityChangeRate = computed(() => state.facilityDetail?.changeRate ?? 0)
+const facilityTodayUsage = computed(() => {
+  const liveValue = selectedLiveEnergy.value
+    ? usageValueForEnergyType(selectedLiveEnergy.value, selectedEnergyType.value)
+    : null
+  return liveValue ?? state.facilityDetail?.todayUsage ?? facilityDetailChart.value.at(-1)?.usage ?? 0
+})
+const facilityChangeAmount = computed(() => state.facilityDetail?.changeAmount ?? facilityDetailLogs.value[0]?.changeAmount ?? 0)
+const facilityChangeRate = computed(() => state.facilityDetail?.changeRate ?? facilityDetailLogs.value[0]?.changeRate ?? 0)
 
 function metricValue(source, camelKey, snakeKey = camelKey) {
   return source?.[camelKey] ?? source?.[snakeKey]
+}
+
+function metricNumber(source, camelKey, snakeKey = camelKey) {
+  const value = metricValue(source, camelKey, snakeKey)
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function energyKey(plantId, facilityId) {
+  return `${Number(plantId)}:${Number(facilityId)}`
+}
+
+function normalizeEnergyMessage(source) {
+  if (!source) {
+    return null
+  }
+
+  const plantId = Number(metricValue(source, 'plantId', 'plant_id'))
+  const facilityId = Number(metricValue(source, 'facilityId', 'facility_id'))
+  const measuredAt = metricValue(source, 'measuredAt', 'measured_at')
+
+  if (!Number.isFinite(plantId) || !Number.isFinite(facilityId) || !measuredAt) {
+    return null
+  }
+
+  return {
+    plantId,
+    facilityId,
+    measuredAt,
+    electricityKwh: metricNumber(source, 'electricityKwh', 'electricity_kwh'),
+    gasM3: metricNumber(source, 'gasM3', 'gas_m3'),
+    waterTon: metricNumber(source, 'waterTon', 'water_ton'),
+    solarKwh: metricNumber(source, 'solarKwh', 'solar_kwh'),
+    peakKw: metricNumber(source, 'peakKw', 'peak_kw'),
+  }
+}
+
+function rememberEnergyMessage(source) {
+  const message = normalizeEnergyMessage(source)
+  if (!message) {
+    return null
+  }
+
+  const key = energyKey(message.plantId, message.facilityId)
+  const previous = liveEnergyByFacility.get(key)
+  const previousTime = Date.parse(previous?.measuredAt || '')
+  const nextTime = Date.parse(message.measuredAt)
+  if (Number.isFinite(previousTime) && Number.isFinite(nextTime) && nextTime < previousTime) {
+    return previous
+  }
+
+  liveEnergyByFacility.set(key, message)
+
+  const series = liveEnergySeriesByFacility.get(key) || []
+  series.push(message)
+  if (series.length > LIVE_SERIES_LIMIT) {
+    series.splice(0, series.length - LIVE_SERIES_LIMIT)
+  }
+  liveEnergySeriesByFacility.set(key, series)
+
+  return message
+}
+
+function usageValueForEnergyType(source, energyType) {
+  if (!source) {
+    return null
+  }
+  const values = {
+    ELECTRICITY: metricNumber(source, 'electricityKwh', 'electricity_kwh'),
+    GAS: metricNumber(source, 'gasM3', 'gas_m3'),
+    WATER: metricNumber(source, 'waterTon', 'water_ton'),
+    SOLAR: metricNumber(source, 'solarKwh', 'solar_kwh'),
+  }
+  return values[energyType] ?? null
+}
+
+function calculateChangeRate(currentUsage, previousUsage) {
+  const current = Number(currentUsage || 0)
+  const previous = Number(previousUsage || 0)
+  return previous === 0 ? 0 : ((current - previous) / previous) * 100
 }
 
 const summaryChartRows = computed(() => {
@@ -132,11 +313,11 @@ const summaryChartRows = computed(() => {
     live: false,
   }))
 
-  if (state.latestEnergy) {
+  if (liveEnergySource.value) {
     rows.push({
       id: 'live-latest',
       label: '현재',
-      value: Number(metricValue(state.latestEnergy, 'electricityKwh', 'electricity_kwh') || 0),
+      value: metricNumber(liveEnergySource.value, 'electricityKwh', 'electricity_kwh'),
       live: true,
       measuredAt: latestMeasuredAt.value,
     })
@@ -299,7 +480,7 @@ function applySummaryDateRange(summaries) {
 
 
 const energyCards = computed(() => {
-  const source = state.latestEnergy || latestSummary.value || {}
+  const source = liveEnergySource.value || {}
   return [
     ['전기 사용량', metricValue(source, 'electricityKwh', 'electricity_kwh'), 'kWh', 'electric'],
     ['가스 사용량', metricValue(source, 'gasM3', 'gas_m3'), 'm3', 'gas'],
@@ -315,13 +496,28 @@ const energyCards = computed(() => {
 
 const peakUsageRate = computed(() => {
   const peak = Number(
-    metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
+    metricValue(liveEnergySource.value, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
   )
   return peak ? Math.min(Math.round((peak / 1400) * 100), 999) : 0
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
-const peakMetrics = computed(() => state.peakDashboard?.metrics || {})
+const peakMetrics = computed(() => {
+  const metrics = state.peakDashboard?.metrics || {}
+  const live = selectedPlantLiveEnergy.value
+  if (!live) {
+    return metrics
+  }
+
+  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const thresholdKw = Number(metrics.thresholdKw || 1400)
+  return {
+    ...metrics,
+    currentKw,
+    peakUsageRate: thresholdKw ? Math.min((currentKw / thresholdKw) * 100, 999) : 0,
+    measuredAt: live.measuredAt,
+  }
+})
 const peakTrend = computed(() => state.peakDashboard?.trend || [])
 const peakRanking = computed(() => state.peakDashboard?.facilityRanking || [])
 const peakHistory = computed(() => state.peakDashboard?.history || [])
@@ -356,7 +552,19 @@ const peakHistoryRows = computed(() =>
     thresholdKw: row.thresholdKw || row.threshold_kw,
   })),
 )
-const utilityMetrics = computed(() => state.utilityDashboard?.metrics || {})
+const utilityMetrics = computed(() => {
+  const metrics = state.utilityDashboard?.metrics || {}
+  const live = selectedPlantLiveEnergy.value
+  if (!live) {
+    return metrics
+  }
+
+  return {
+    ...metrics,
+    gasTotalM3: metricNumber(live, 'gasM3', 'gas_m3'),
+    waterTotalTon: metricNumber(live, 'waterTon', 'water_ton'),
+  }
+})
 const utilityHourlyUsage = computed(() =>
   (state.utilityDashboard?.hourlyUsage || []).map((point) => ({
     measuredAt: point.measuredAt || point.measured_at,
@@ -486,9 +694,33 @@ const esgMapPositions = [
   { left: 56, top: 74 },
 ]
 
+function buildScadaExternalUrl(userName) {
+  const url = new URL(SCADA_EXTERNAL_URL)
+  if (userName) {
+    url.searchParams.set('userName', userName)
+  }
+  return url.toString()
+}
+
+async function redirectToScada() {
+  let userName = state.me?.name
+
+  if (!userName && getAccessToken()) {
+    try {
+      const me = await api.me()
+      state.me = me
+      userName = me.name
+    } catch {
+      userName = ''
+    }
+  }
+
+  window.location.href = buildScadaExternalUrl(userName)
+}
+
 function routeTo(hash) {
   if (hash === '/scada') {
-    window.location.href = SCADA_EXTERNAL_URL
+    redirectToScada()
     return
   }
   if (window.location.hash === `#${hash}`) {
@@ -506,8 +738,13 @@ function applyRoute() {
     return
   }
 
+  if (!getAccessToken()) {
+    routeTo('/login')
+    return
+  }
+
   if (route === '/scada') {
-    window.location.href = SCADA_EXTERNAL_URL
+    redirectToScada()
     return
   }
 
@@ -580,7 +817,14 @@ async function run(task) {
     await task()
   } catch (error) {
     errorMessage.value = error.message
-    if (error.status === 401 || error.message.includes('인증') || error.message.includes('Unauthorized')) {
+    if (
+      error.status === 401 ||
+      error.status === 403 ||
+      error.message.includes('인증') ||
+      error.message.includes('Unauthorized')
+    ) {
+      stopEnergyWebSocket()
+      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -605,6 +849,7 @@ async function logout() {
       await api.logout()
     } finally {
       stopEnergyWebSocket()
+      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -613,12 +858,28 @@ async function logout() {
 
 async function loadInitial() {
   await run(async () => {
-    const [me, plants] = await Promise.all([api.me(), api.plants()])
+    const [me, plantsResponse] = await Promise.all([api.me(), api.plants()])
+    const plants = Array.isArray(plantsResponse) ? plantsResponse : []
     state.me = me
     state.plants = plants
+
+    const currentPlant = plants.find((plant) => Number(plant.id) === Number(selectedPlantId.value))
+    const userPlant = plants.find((plant) => Number(plant.id) === Number(me.plantId))
+    const fallbackPlantId = userPlant?.id ?? plants[0]?.id ?? null
+
     syncingSelection.value = true
-    selectedPlantId.value = selectedPlantId.value || me.plantId || plants[0]?.id || null
+    selectedPlantId.value = currentPlant?.id ?? fallbackPlantId
     syncingSelection.value = false
+
+    if (!selectedPlantId.value) {
+      state.facilities = []
+      state.summaries = []
+      state.measurements = []
+      state.latestEnergy = null
+      state.facilityDetail = null
+      return
+    }
+
     if (appMode.value === 'detail' && activePage.value !== 'facility') {
       await loadActivePageData()
       return
@@ -712,10 +973,11 @@ async function loadEnergyData() {
 
   state.summaries = summaries
   state.measurements = measurements
-  state.latestEnergy = latestEnergy
+  state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   await loadFacilityDetail()
   startEnergyWebSocket()
+  startEnergyPolling()
 }
 
 async function loadOverviewEnergyData() {
@@ -737,9 +999,10 @@ async function loadOverviewEnergyData() {
 
   state.summaries = summaries
   state.measurements = []
-  state.latestEnergy = latestEnergy
+  state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   startEnergyWebSocket()
+  startEnergyPolling()
 }
 
 async function loadFacilityDetail() {
@@ -788,12 +1051,23 @@ async function loadEsgDashboard() {
 }
 
 async function loadLatestEnergy() {
-  if (!selectedPlantId.value || !selectedFacilityId.value || appMode.value === 'login') {
+  if (!selectedPlantId.value || appMode.value === 'login') {
     state.latestEnergy = null
     return
   }
 
-  state.latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+  if (selectedFacilityId.value) {
+    const latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+    state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
+    return
+  }
+
+  const measurements = await api.energyMeasurements({
+    plantId: selectedPlantId.value,
+    limit: 100,
+  }).catch(() => [])
+  measurements.forEach(rememberEnergyMessage)
+  state.latestEnergy = selectedLiveEnergy.value || null
 }
 
 function energyWebSocketUrl() {
@@ -821,11 +1095,18 @@ function startEnergyWebSocket() {
       return
     }
 
-    const plantId = Number(metricValue(message, 'plantId', 'plant_id'))
-    const facilityId = Number(metricValue(message, 'facilityId', 'facility_id'))
+    const normalizedMessage = rememberEnergyMessage(message)
+    if (!normalizedMessage) {
+      return
+    }
 
-    if (plantId === Number(selectedPlantId.value) && facilityId === Number(selectedFacilityId.value)) {
-      state.latestEnergy = message
+    const plantId = Number(normalizedMessage.plantId)
+    const facilityId = Number(normalizedMessage.facilityId)
+
+    if (plantId === Number(selectedPlantId.value)) {
+      if (!selectedFacilityId.value || facilityId === Number(selectedFacilityId.value)) {
+        state.latestEnergy = selectedLiveEnergy.value || normalizedMessage
+      }
     }
     if (plantId === Number(selectedPlantId.value) && activePage.value === 'peak') {
       schedulePeakRefresh()
@@ -859,6 +1140,31 @@ function stopEnergyWebSocket() {
   }
 }
 
+function startEnergyPolling() {
+  if (energyPollTimer || appMode.value === 'login') {
+    return
+  }
+
+  energyPollTimer = window.setInterval(async () => {
+    if (latestEnergyPollInFlight || appMode.value === 'login') {
+      return
+    }
+
+    latestEnergyPollInFlight = true
+    try {
+      await loadLatestEnergy()
+    } finally {
+      latestEnergyPollInFlight = false
+    }
+  }, LIVE_POLL_MS)
+}
+
+function stopEnergyPolling() {
+  window.clearInterval(energyPollTimer)
+  energyPollTimer = null
+  latestEnergyPollInFlight = false
+}
+
 async function refreshData() {
   if (appMode.value === 'detail' && activePage.value !== 'facility') {
     await run(loadActivePageData)
@@ -868,17 +1174,27 @@ async function refreshData() {
 }
 
 function schedulePeakRefresh() {
+  if (peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+    return
+  }
   window.clearTimeout(peakRefreshTimer)
   peakRefreshTimer = window.setTimeout(() => {
+    lastPeakRefreshAt = Date.now()
+    peakRefreshTimer = null
     loadPeakDashboard().catch(() => {})
-  }, 500)
+  }, 1000)
 }
 
 function scheduleUtilityRefresh() {
+  if (utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+    return
+  }
   window.clearTimeout(utilityRefreshTimer)
   utilityRefreshTimer = window.setTimeout(() => {
+    lastUtilityRefreshAt = Date.now()
+    utilityRefreshTimer = null
     loadUtilityDashboard().catch(() => {})
-  }, 500)
+  }, 1000)
 }
 
 async function resolveAlarm(alarmId) {
@@ -969,6 +1285,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
+  stopEnergyPolling()
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
   window.removeEventListener('hashchange', applyRoute)
@@ -1038,7 +1355,7 @@ onUnmounted(() => {
       <article v-for="card in energyCards" :key="card.label" :class="['scada-energy-card', card.tone]">
         <span>{{ card.label }}</span>
         <strong>{{ card.value }} <small>{{ card.unit }}</small></strong>
-        <p>{{ state.latestEnergy ? `실시간 수신 ${formatDateTime(latestMeasuredAt).slice(11)}` : 'DB 요약값' }}</p>
+        <p>{{ liveEnergyFresh ? `실시간 수신 ${formatDateTime(latestMeasuredAt).slice(11)}` : 'DB 요약값' }}</p>
       </article>
     </section>
 
@@ -1046,7 +1363,7 @@ onUnmounted(() => {
       <article class="scada-panel wide">
         <div class="panel-title inline">
           <h2>최근 에너지 요약 추이</h2>
-          <span class="live-pill">{{ state.latestEnergy ? '현재값 반영' : 'API 연동' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '현재값 반영' : 'API 연동' }}</span>
         </div>
         <div class="summary-chart">
           <div
@@ -1073,7 +1390,7 @@ onUnmounted(() => {
             <span>
               {{
                 formatNumber(
-                  metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ??
+                  metricValue(liveEnergySource, 'peakKw', 'peak_kw') ??
                     metricValue(latestSummary, 'peakKw', 'peak_kw'),
                 )
               }}
@@ -1304,7 +1621,7 @@ onUnmounted(() => {
           <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
         </section>
 
         <section class="peak-kpi-grid">
@@ -1452,7 +1769,7 @@ onUnmounted(() => {
           <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
         </section>
 
         <section class="utility-kpi-grid">
