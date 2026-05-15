@@ -2,7 +2,6 @@ package com.smartfactory.scada.energy.controller;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
@@ -13,11 +12,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.smartfactory.scada.energy.domain.SummaryType;
-import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.service.EnergyService;
-import com.smartfactory.scada.energy.service.EnergyMeasurementRedisService;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +25,6 @@ import lombok.RequiredArgsConstructor;
 @SecurityRequirement(name = "bearerAuth")
 public class EnergyMeasurementController {
 
-	private final EnergyMeasurementRedisService energyMeasurementRedisService;
 	private final EnergyService energyService;
 
 	@GetMapping("/measurements")
@@ -54,15 +50,11 @@ public class EnergyMeasurementController {
 	}
 
 	@GetMapping("/latest/plants/{plantId}/facilities/{facilityId}")
-	public ResponseEntity<EnergyMeasurementMessage> findLatest(
+	public ResponseEntity<EnergyMeasurementResponse> findLatest(
 		@PathVariable Long plantId,
 		@PathVariable Long facilityId
 	) {
-		// Return the cached latest value when present, otherwise respond with 404.
-		Optional<EnergyMeasurementMessage> latestMeasurement =
-			energyMeasurementRedisService.findLatest(plantId, facilityId);
-
-		return latestMeasurement
+		return energyService.getLatestMeasurement(plantId, facilityId)
 			.map(ResponseEntity::ok)
 			.orElseGet(() -> ResponseEntity.notFound().build());
 	}

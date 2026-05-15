@@ -31,6 +31,29 @@
         <result property="carbonEmission" column="carbon_emission"/>
     </resultMap>
 
+    <insert id="insertMeasurement" parameterType="com.smartfactory.scada.energy.domain.EnergyMeasurement" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO energy_measurements (
+            plant_id,
+            facility_id,
+            measured_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw
+        )
+        VALUES (
+            #{plantId},
+            #{facilityId},
+            #{measuredAt},
+            #{electricityKwh},
+            #{gasM3},
+            #{waterTon},
+            #{solarKwh},
+            #{peakKw}
+        )
+    </insert>
+
     <select id="findMeasurements" resultMap="EnergyMeasurementResultMap">
         SELECT id, plant_id, facility_id, measured_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, created_at
         FROM energy_measurements
@@ -62,6 +85,15 @@
             <if test="to != null">AND summary_at &lt;= #{to}</if>
         </where>
         ORDER BY summary_at ASC, id ASC
+    </select>
+
+    <select id="findLatestMeasurement" resultMap="EnergyMeasurementResultMap">
+        SELECT id, plant_id, facility_id, measured_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, created_at
+        FROM energy_measurements
+        WHERE plant_id = #{plantId}
+          AND facility_id = #{facilityId}
+        ORDER BY measured_at DESC, id DESC
+        LIMIT 1
     </select>
 
     <select id="findLatestPlantSummary" resultMap="EnergySummaryResultMap">
