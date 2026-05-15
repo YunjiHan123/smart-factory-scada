@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { Activity, Bolt, Gauge, History, ListOrdered, Search, Zap } from 'lucide-vue-next'
+import { Activity, Bolt, Droplets, Flame, Gauge, History, ListOrdered, RadioReceiver, Search, Zap } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
@@ -13,10 +13,12 @@ const selectedEnergyType = ref('ELECTRICITY')
 const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
+const selectedUtilityDate = ref(formatDateInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
 let peakRefreshTimer = null
+let utilityRefreshTimer = null
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -38,6 +40,7 @@ const state = reactive({
   measurements: [],
   latestEnergy: null,
   peakDashboard: null,
+  utilityDashboard: null,
   facilityDetail: null,
   alarms: [],
   esgScores: [],
@@ -168,6 +171,50 @@ function trendPrefix(value) {
   return Number(value || 0) > 0 ? '+' : ''
 }
 
+function utilityBarHeight(value, maxValue) {
+  return Math.max(8, Math.round((Number(value || 0) / maxValue) * 100))
+}
+
+function meterTypeLabel(type) {
+  const labels = {
+    GAS: '가스',
+    WATER: '용수',
+  }
+  return labels[type] || type || '-'
+}
+
+function meterStatusLabel(status) {
+  const labels = {
+    NORMAL: '정상',
+    DELAY: '지연',
+    NONE: '미수신',
+  }
+  return labels[status] || status || '-'
+}
+
+function meterStatusClass(status) {
+  if (status === 'NORMAL') {
+    return 'ok'
+  }
+  if (status === 'DELAY') {
+    return 'warn'
+  }
+  return 'danger'
+}
+
+function utilityPatternStyle(rate, tone) {
+  const normalizedRate = Math.max(0, Math.min(Number(rate || 0), 100))
+  const opacity = 0.1 + normalizedRate / 100 * 0.82
+  const color = tone === 'gas' ? '255, 138, 0' : '0, 184, 217'
+  const border = tone === 'gas' ? '255, 138, 0' : '0, 184, 217'
+  return {
+    '--pattern-color': color,
+    '--pattern-border': border,
+    '--pattern-opacity': opacity.toFixed(2),
+    '--pattern-shadow': `${Math.round(normalizedRate / 100 * 18)}px`,
+  }
+}
+
 function applySummaryDateRange(summaries) {
   if (!summaries.length || selectedDateFrom.value || selectedDateTo.value) {
     return
@@ -245,6 +292,46 @@ const peakHistoryRows = computed(() =>
     thresholdKw: row.thresholdKw || row.threshold_kw,
   })),
 )
+const utilityMetrics = computed(() => state.utilityDashboard?.metrics || {})
+const utilityHourlyUsage = computed(() =>
+  (state.utilityDashboard?.hourlyUsage || []).map((point) => ({
+    measuredAt: point.measuredAt || point.measured_at,
+    gasUsageM3: Number(point.gasUsageM3 || point.gas_usage_m3 || 0),
+    waterUsageTon: Number(point.waterUsageTon || point.water_usage_ton || 0),
+  })),
+)
+const utilityMeterStatuses = computed(() => state.utilityDashboard?.meterStatuses || [])
+const utilityPatterns = computed(() => {
+  const patternsByDate = new Map(
+    (state.utilityDashboard?.patterns || []).map((pattern) => [
+      formatDate(pattern.usageDate || pattern.usage_date),
+      {
+        usageDate: pattern.usageDate || pattern.usage_date,
+        gasUsageM3: Number(pattern.gasUsageM3 || pattern.gas_usage_m3 || 0),
+        waterUsageTon: Number(pattern.waterUsageTon || pattern.water_usage_ton || 0),
+        gasUsageRate: Number(pattern.gasUsageRate || pattern.gas_usage_rate || 0),
+        waterUsageRate: Number(pattern.waterUsageRate || pattern.water_usage_rate || 0),
+      },
+    ]),
+  )
+  const endDate = new Date(`${selectedUtilityDate.value || formatDateInput(new Date())}T00:00:00`)
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(endDate)
+    date.setDate(endDate.getDate() - 6 + index)
+    const dateKey = formatDateInput(date)
+    return (
+      patternsByDate.get(dateKey) || {
+        usageDate: dateKey,
+        gasUsageM3: 0,
+        waterUsageTon: 0,
+        gasUsageRate: 0,
+        waterUsageRate: 0,
+      }
+    )
+  })
+})
+const utilityGasMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.gasUsageM3)))
+const utilityWaterMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.waterUsageTon)))
 
 function routeTo(hash) {
   if (window.location.hash === `#${hash}`) {
@@ -336,7 +423,7 @@ async function run(task) {
     await task()
   } catch (error) {
     errorMessage.value = error.message
-    if (error.message.includes('인증') || error.message.includes('Unauthorized')) {
+    if (error.status === 401 || error.message.includes('인증') || error.message.includes('Unauthorized')) {
       clearTokens()
       routeTo('/login')
     }
@@ -402,6 +489,7 @@ async function loadPlantData() {
 
   await loadEnergyData()
   await loadPeakDashboard()
+  await loadUtilityDashboard()
 }
 
 async function loadEnergyData() {
@@ -462,6 +550,18 @@ async function loadPeakDashboard() {
   })
 }
 
+async function loadUtilityDashboard() {
+  if (!selectedPlantId.value) {
+    state.utilityDashboard = null
+    return
+  }
+
+  state.utilityDashboard = await api.utilityDashboard({
+    plantId: selectedPlantId.value,
+    date: selectedUtilityDate.value || undefined,
+  })
+}
+
 async function loadLatestEnergy() {
   if (!selectedPlantId.value || !selectedFacilityId.value || appMode.value === 'login') {
     state.latestEnergy = null
@@ -505,6 +605,9 @@ function startEnergyWebSocket() {
     if (plantId === Number(selectedPlantId.value) && activePage.value === 'peak') {
       schedulePeakRefresh()
     }
+    if (plantId === Number(selectedPlantId.value) && activePage.value === 'utility') {
+      scheduleUtilityRefresh()
+    }
   }
 
   energySocket.onclose = () => {
@@ -539,6 +642,13 @@ function schedulePeakRefresh() {
   window.clearTimeout(peakRefreshTimer)
   peakRefreshTimer = window.setTimeout(() => {
     loadPeakDashboard().catch(() => {})
+  }, 500)
+}
+
+function scheduleUtilityRefresh() {
+  window.clearTimeout(utilityRefreshTimer)
+  utilityRefreshTimer = window.setTimeout(() => {
+    loadUtilityDashboard().catch(() => {})
   }, 500)
 }
 
@@ -587,6 +697,12 @@ watch(selectedPeakDate, () => {
   }
 })
 
+watch(selectedUtilityDate, () => {
+  if (appMode.value !== 'login' && !syncingSelection.value) {
+    run(loadUtilityDashboard)
+  }
+})
+
 onMounted(() => {
   applyRoute()
   window.addEventListener('hashchange', applyRoute)
@@ -599,6 +715,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopEnergyWebSocket()
   window.clearTimeout(peakRefreshTimer)
+  window.clearTimeout(utilityRefreshTimer)
   window.removeEventListener('hashchange', applyRoute)
 })
 </script>
@@ -791,7 +908,7 @@ onUnmounted(() => {
             <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
           </select>
         </label>
-        <label v-if="activePage !== 'peak'">
+        <label v-if="!['peak', 'utility'].includes(activePage)">
           설비
           <select v-model.number="selectedFacilityId">
             <option :value="null">전체 설비</option>
@@ -800,7 +917,7 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label v-if="activePage !== 'peak'">
+        <label v-if="!['peak', 'utility'].includes(activePage)">
           에너지 종류
           <select v-model="selectedEnergyType">
             <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
@@ -808,11 +925,11 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label v-if="activePage !== 'peak'">
+        <label v-if="!['peak', 'utility'].includes(activePage)">
           시작일
           <input v-model="selectedDateFrom" type="date" />
         </label>
-        <label v-if="activePage !== 'peak'">
+        <label v-if="!['peak', 'utility'].includes(activePage)">
           종료일
           <input v-model="selectedDateTo" type="date" />
         </label>
@@ -1070,22 +1187,157 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <section v-else-if="activePage === 'utility'" class="page-stack">
-        <article class="panel table-panel">
-          <h2>가스/용수 요약</h2>
-          <table>
-            <thead><tr><th>요약 시각</th><th>설비 ID</th><th>가스 m3</th><th>용수 ton</th><th>탄소배출</th></tr></thead>
-            <tbody>
-              <tr v-for="row in state.summaries" :key="row.id">
-                <td>{{ formatDateTime(row.summaryAt) }}</td>
-                <td>{{ row.facilityId || '사업장 합계' }}</td>
-                <td>{{ formatNumber(row.gasM3) }}</td>
-                <td>{{ formatNumber(row.waterTon) }}</td>
-                <td>{{ formatNumber(row.carbonEmission) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </article>
+      <section v-else-if="activePage === 'utility'" class="page-stack utility-monitor-page">
+        <section class="utility-filter-row">
+          <label>
+            조회일
+            <input v-model="selectedUtilityDate" type="date" />
+          </label>
+          <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
+            <Search :size="17" /> 조회
+          </button>
+          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+        </section>
+
+        <section class="utility-kpi-grid">
+          <article class="utility-kpi-card gas">
+            <span class="utility-card-icon"><Flame :size="23" /></span>
+            <div>
+              <p>가스 금일 사용량</p>
+              <b>{{ formatNumber(utilityMetrics.gasUsageM3) }}<small> m3</small></b>
+              <em :class="trendClass(utilityMetrics.gasChangeRate)">
+                전일 대비 {{ trendPrefix(utilityMetrics.gasChangeRate) }}{{ formatNumber(utilityMetrics.gasChangeRate) }}%
+              </em>
+            </div>
+          </article>
+          <article class="utility-kpi-card gas">
+            <span class="utility-card-icon"><Gauge :size="23" /></span>
+            <div>
+              <p>가스 적산량</p>
+              <b>{{ formatNumber(utilityMetrics.gasTotalM3) }}<small> m3</small></b>
+              <em>최신 누적 계량값</em>
+            </div>
+          </article>
+          <article class="utility-kpi-card water">
+            <span class="utility-card-icon"><Droplets :size="23" /></span>
+            <div>
+              <p>용수 금일 사용량</p>
+              <b>{{ formatNumber(utilityMetrics.waterUsageTon) }}<small> ton</small></b>
+              <em :class="trendClass(utilityMetrics.waterChangeRate)">
+                전일 대비 {{ trendPrefix(utilityMetrics.waterChangeRate) }}{{ formatNumber(utilityMetrics.waterChangeRate) }}%
+              </em>
+            </div>
+          </article>
+          <article class="utility-kpi-card water">
+            <span class="utility-card-icon"><Gauge :size="23" /></span>
+            <div>
+              <p>용수 적산량</p>
+              <b>{{ formatNumber(utilityMetrics.waterTotalTon) }}<small> ton</small></b>
+              <em>최신 누적 계량값</em>
+            </div>
+          </article>
+        </section>
+
+        <section class="utility-chart-grid">
+          <article class="panel utility-chart-panel gas">
+            <div class="panel-title inline">
+              <h2>가스 시간대별 사용량</h2>
+              <span>단위: m3</span>
+            </div>
+            <div class="utility-bar-chart">
+              <div v-for="point in utilityHourlyUsage" :key="`gas-${point.measuredAt}`" class="utility-bar">
+                <b>{{ formatNumber(point.gasUsageM3) }}</b>
+                <i :style="{ height: `${utilityBarHeight(point.gasUsageM3, utilityGasMax)}%` }"></i>
+                <span>{{ formatTime(point.measuredAt) }}</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel utility-chart-panel water">
+            <div class="panel-title inline">
+              <h2>용수 시간대별 사용량</h2>
+              <span>단위: ton</span>
+            </div>
+            <div class="utility-bar-chart">
+              <div v-for="point in utilityHourlyUsage" :key="`water-${point.measuredAt}`" class="utility-bar">
+                <b>{{ formatNumber(point.waterUsageTon) }}</b>
+                <i :style="{ height: `${utilityBarHeight(point.waterUsageTon, utilityWaterMax)}%` }"></i>
+                <span>{{ formatTime(point.measuredAt) }}</span>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="utility-bottom-grid">
+          <article class="panel table-panel utility-meter-panel">
+            <div class="panel-title inline">
+              <h2>계측기별 상태 조회</h2>
+              <RadioReceiver :size="20" />
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>계측기명</th>
+                  <th>구분</th>
+                  <th>현재값</th>
+                  <th>단위</th>
+                  <th>최근 수신</th>
+                  <th>통신 상태</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="meter in utilityMeterStatuses" :key="`${meter.meterType}-${meter.facilityId}`">
+                  <td>{{ meter.meterName || meter.facilityName }}</td>
+                  <td :class="meter.meterType === 'GAS' ? 'utility-gas-text' : 'utility-water-text'">
+                    {{ meterTypeLabel(meter.meterType) }}
+                  </td>
+                  <td>{{ formatNumber(meter.currentValue) }}</td>
+                  <td>{{ meter.unit }}</td>
+                  <td>{{ formatDateTime(meter.lastReceivedAt) }}</td>
+                  <td>
+                    <span :class="['badge', meterStatusClass(meter.communicationStatus)]">
+                      {{ meterStatusLabel(meter.communicationStatus) }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="panel utility-pattern-panel">
+            <div class="panel-title inline">
+              <h2>사용 패턴 분석</h2>
+              <span>최근 7일</span>
+            </div>
+            <div class="utility-pattern-grid">
+              <span class="utility-pattern-label gas"><Flame :size="18" />가스</span>
+              <div
+                v-for="pattern in utilityPatterns"
+                :key="`gas-pattern-${pattern.usageDate}`"
+                class="utility-pattern-cell gas"
+                :style="utilityPatternStyle(pattern.gasUsageRate, 'gas')"
+              >
+                <b>{{ formatDate(pattern.usageDate).slice(5) }}</b>
+                <strong>{{ formatNumber(pattern.gasUsageRate, 0) }}%</strong>
+              </div>
+              <span class="utility-pattern-label water"><Droplets :size="18" />용수</span>
+              <div
+                v-for="pattern in utilityPatterns"
+                :key="`water-pattern-${pattern.usageDate}`"
+                class="utility-pattern-cell water"
+                :style="utilityPatternStyle(pattern.waterUsageRate, 'water')"
+              >
+                <b>{{ formatDate(pattern.usageDate).slice(5) }}</b>
+                <strong>{{ formatNumber(pattern.waterUsageRate, 0) }}%</strong>
+              </div>
+            </div>
+            <div class="utility-pattern-summary">
+              <span>낮음</span>
+              <i></i>
+              <span>높음</span>
+            </div>
+          </article>
+        </section>
       </section>
 
       <section v-else-if="activePage === 'esg'" class="page-stack">
