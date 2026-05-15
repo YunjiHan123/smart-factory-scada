@@ -54,6 +54,31 @@
         <result property="exceeded" column="exceeded"/>
     </resultMap>
 
+    <resultMap id="UtilityHourlyUsageResultMap" type="com.smartfactory.scada.energy.dto.UtilityHourlyUsage">
+        <result property="measuredAt" column="measured_at"/>
+        <result property="gasUsageM3" column="gas_usage_m3"/>
+        <result property="waterUsageTon" column="water_usage_ton"/>
+    </resultMap>
+
+    <resultMap id="UtilityMeterStatusResultMap" type="com.smartfactory.scada.energy.dto.UtilityMeterStatus">
+        <result property="facilityId" column="facility_id"/>
+        <result property="facilityName" column="facility_name"/>
+        <result property="meterName" column="meter_name"/>
+        <result property="meterType" column="meter_type"/>
+        <result property="currentValue" column="current_value"/>
+        <result property="unit" column="unit"/>
+        <result property="lastReceivedAt" column="last_received_at"/>
+        <result property="communicationStatus" column="communication_status"/>
+    </resultMap>
+
+    <resultMap id="UtilityUsagePatternResultMap" type="com.smartfactory.scada.energy.dto.UtilityUsagePattern">
+        <result property="usageDate" column="usage_date"/>
+        <result property="gasUsageM3" column="gas_usage_m3"/>
+        <result property="waterUsageTon" column="water_usage_ton"/>
+        <result property="gasUsageRate" column="gas_usage_rate"/>
+        <result property="waterUsageRate" column="water_usage_rate"/>
+    </resultMap>
+
     <insert id="insertMeasurement" parameterType="com.smartfactory.scada.energy.domain.EnergyMeasurement" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO energy_measurements (
             plant_id,
@@ -545,5 +570,199 @@
             NULL AS created_at
         FROM latest_per_facility
         GROUP BY plant_id
+    </select>
+
+    <select id="findUtilityHourlyUsage" resultMap="UtilityHourlyUsageResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                TIMESTAMP(DATE(measured_at), MAKETIME(HOUR(measured_at), 0, 0)) AS measured_hour,
+                gas_m3,
+                water_ton,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+        )
+        SELECT
+            measured_hour AS measured_at,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_gas_m3 IS NULL THEN 0
+                    WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                    ELSE 0
+                END
+            ), 0), 2) AS gas_usage_m3,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_water_ton IS NULL THEN 0
+                    WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                    ELSE 0
+                END
+            ), 0), 2) AS water_usage_ton
+        FROM ordered_measurements
+        GROUP BY measured_hour
+        ORDER BY measured_hour ASC
+    </select>
+
+    <select id="findLatestPlantUtilityMeasurement" resultMap="EnergyMeasurementResultMap">
+        WITH latest_per_facility AS (
+            SELECT em.*
+            FROM energy_measurements em
+            JOIN (
+                SELECT facility_id, MAX(measured_at) AS measured_at
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND measured_at &gt;= #{from}
+                  AND measured_at &lt; #{to}
+                GROUP BY facility_id
+            ) latest
+              ON latest.facility_id = em.facility_id
+             AND latest.measured_at = em.measured_at
+            WHERE em.plant_id = #{plantId}
+        )
+        SELECT
+            NULL AS id,
+            plant_id,
+            NULL AS facility_id,
+            MAX(measured_at) AS measured_at,
+            NULL AS electricity_kwh,
+            COALESCE(SUM(gas_m3), 0) AS gas_m3,
+            COALESCE(SUM(water_ton), 0) AS water_ton,
+            NULL AS solar_kwh,
+            NULL AS peak_kw,
+            NULL AS created_at
+        FROM latest_per_facility
+        GROUP BY plant_id
+    </select>
+
+    <select id="findUtilityMeterStatuses" resultMap="UtilityMeterStatusResultMap">
+        WITH latest_ranked AS (
+            SELECT
+                em.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY em.facility_id
+                    ORDER BY em.measured_at DESC, em.id DESC
+                ) AS rn
+            FROM energy_measurements em
+            WHERE em.plant_id = #{plantId}
+              AND em.measured_at &gt;= #{from}
+              AND em.measured_at &lt; #{to}
+        ),
+        latest AS (
+            SELECT *
+            FROM latest_ranked
+            WHERE rn = 1
+        )
+        SELECT
+            f.id AS facility_id,
+            f.name AS facility_name,
+            CONCAT(f.name, ' 가스 계측기') AS meter_name,
+            'GAS' AS meter_type,
+            COALESCE(l.gas_m3, 0) AS current_value,
+            'm3' AS unit,
+            l.measured_at AS last_received_at,
+            CASE
+                WHEN l.measured_at IS NULL THEN 'NONE'
+                WHEN l.measured_at &gt;= DATE_SUB(NOW(), INTERVAL 2 MINUTE) THEN 'NORMAL'
+                ELSE 'DELAY'
+            END AS communication_status
+        FROM facilities f
+        LEFT JOIN latest l ON l.facility_id = f.id
+        WHERE f.plant_id = #{plantId}
+        UNION ALL
+        SELECT
+            f.id AS facility_id,
+            f.name AS facility_name,
+            CONCAT(f.name, ' 용수 계측기') AS meter_name,
+            'WATER' AS meter_type,
+            COALESCE(l.water_ton, 0) AS current_value,
+            'ton' AS unit,
+            l.measured_at AS last_received_at,
+            CASE
+                WHEN l.measured_at IS NULL THEN 'NONE'
+                WHEN l.measured_at &gt;= DATE_SUB(NOW(), INTERVAL 2 MINUTE) THEN 'NORMAL'
+                ELSE 'DELAY'
+            END AS communication_status
+        FROM facilities f
+        LEFT JOIN latest l ON l.facility_id = f.id
+        WHERE f.plant_id = #{plantId}
+        ORDER BY facility_id ASC, meter_type ASC
+    </select>
+
+    <select id="findUtilityDailyUsagePatterns" resultMap="UtilityUsagePatternResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                DATE(measured_at) AS usage_date,
+                gas_m3,
+                water_ton,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+        ),
+        daily_usage AS (
+            SELECT
+                usage_date,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_gas_m3 IS NULL THEN 0
+                        WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                        ELSE 0
+                    END
+                ), 0) AS gas_usage_m3,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_water_ton IS NULL THEN 0
+                        WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                        ELSE 0
+                    END
+                ), 0) AS water_usage_ton
+            FROM ordered_measurements
+            GROUP BY usage_date
+        )
+        SELECT
+            usage_date,
+            ROUND(gas_usage_m3, 2) AS gas_usage_m3,
+            ROUND(water_usage_ton, 2) AS water_usage_ton,
+            ROUND(
+                CASE
+                    WHEN MAX(gas_usage_m3) OVER () = 0 THEN 0
+                    ELSE gas_usage_m3 / MAX(gas_usage_m3) OVER () * 100
+                END,
+                1
+            ) AS gas_usage_rate,
+            ROUND(
+                CASE
+                    WHEN MAX(water_usage_ton) OVER () = 0 THEN 0
+                    ELSE water_usage_ton / MAX(water_usage_ton) OVER () * 100
+                END,
+                1
+            ) AS water_usage_rate
+        FROM daily_usage
+        ORDER BY usage_date ASC
     </select>
 </mapper>
