@@ -32,6 +32,13 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	List<EnergySummary> findMeasurementDailySums(
+		@Param("plantId") Long plantId,
+		@Param("facilityId") Long facilityId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	Optional<EnergyMeasurement> findLatestMeasurement(
 		@Param("plantId") Long plantId,
 		@Param("facilityId") Long facilityId

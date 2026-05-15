@@ -119,7 +119,19 @@ public class EnergyService {
 			resolvedFrom.atStartOfDay(),
 			resolvedTo.atTime(LocalTime.MAX)
 		);
+		List<EnergySummary> measurementDailySums = energyMapper.findMeasurementDailySums(
+			plantId,
+			facilityId,
+			resolvedFrom.atStartOfDay(),
+			resolvedTo.atTime(LocalTime.MAX)
+		);
 		Map<LocalDate, EnergySummary> summariesByDate = summaries.stream()
+			.collect(Collectors.toMap(
+				summary -> summary.getSummaryAt().toLocalDate(),
+				summary -> summary,
+				(left, right) -> right
+			));
+		Map<LocalDate, EnergySummary> measurementSumsByDate = measurementDailySums.stream()
 			.collect(Collectors.toMap(
 				summary -> summary.getSummaryAt().toLocalDate(),
 				summary -> summary,
@@ -128,7 +140,7 @@ public class EnergyService {
 
 		List<EnergyUsagePointResponse> chart = resolvedFrom.datesUntil(resolvedTo.plusDays(1))
 			.map(date -> {
-				EnergySummary summary = summariesByDate.get(date);
+				EnergySummary summary = summaryForDate(date, resolvedTo, summariesByDate, measurementSumsByDate);
 				return new EnergyUsagePointResponse(
 					date,
 					summary == null ? date.atStartOfDay() : summary.getSummaryAt(),
@@ -195,6 +207,19 @@ public class EnergyService {
 		}
 		BigDecimal usage = energyType.usage(summary);
 		return usage == null ? BigDecimal.ZERO : usage;
+	}
+
+	private EnergySummary summaryForDate(
+		LocalDate date,
+		LocalDate currentDate,
+		Map<LocalDate, EnergySummary> summariesByDate,
+		Map<LocalDate, EnergySummary> measurementSumsByDate
+	) {
+		EnergySummary measurementSum = measurementSumsByDate.get(date);
+		if (date.equals(currentDate) && measurementSum != null) {
+			return measurementSum;
+		}
+		return summariesByDate.getOrDefault(date, measurementSum);
 	}
 
 	private BigDecimal usageByDate(List<EnergyUsagePointResponse> chart, LocalDate date) {
