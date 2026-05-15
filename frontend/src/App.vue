@@ -1157,14 +1157,14 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <section v-if="activePage !== 'esg'" class="filter-card">
+      <section v-if="['facility', 'peak', 'utility'].includes(activePage)" class="filter-card">
         <label>
           사업장
           <select v-model.number="selectedPlantId">
             <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
+        <label v-if="activePage === 'facility'">
           설비
           <select v-model.number="selectedFacilityId">
             <option :value="null">전체 설비</option>
@@ -1173,7 +1173,7 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
+        <label v-if="activePage === 'facility'">
           에너지 종류
           <select v-model="selectedEnergyType">
             <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
@@ -1181,11 +1181,11 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
+        <label v-if="activePage === 'facility'">
           시작일
           <input v-model="selectedDateFrom" type="date" />
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
+        <label v-if="activePage === 'facility'">
           종료일
           <input v-model="selectedDateTo" type="date" />
         </label>
