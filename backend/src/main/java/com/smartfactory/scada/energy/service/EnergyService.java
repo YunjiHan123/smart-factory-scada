@@ -204,7 +204,9 @@ public class EnergyService {
 		LocalDate resolvedTo = to == null ? LocalDate.now() : to;
 		LocalDate resolvedFrom = from == null ? resolvedTo.minusDays(6) : from;
 		if (resolvedFrom.isAfter(resolvedTo)) {
-			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+			LocalDate previousFrom = resolvedFrom;
+			resolvedFrom = resolvedTo;
+			resolvedTo = previousFrom;
 		}
 
 		Facility facility = facilityMapper.findById(facilityId)
@@ -236,10 +238,11 @@ public class EnergyService {
 				summary -> summary,
 				(left, right) -> right
 			));
+		LocalDate currentDate = resolvedTo;
 
 		List<EnergyUsagePointResponse> chart = resolvedFrom.datesUntil(resolvedTo.plusDays(1))
 			.map(date -> {
-				EnergySummary summary = summaryForDate(date, resolvedTo, summariesByDate, measurementSumsByDate);
+				EnergySummary summary = summaryForDate(date, currentDate, summariesByDate, measurementSumsByDate);
 				return new EnergyUsagePointResponse(
 					date,
 					summary == null ? date.atStartOfDay() : summary.getSummaryAt(),
