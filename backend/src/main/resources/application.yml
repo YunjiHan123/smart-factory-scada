@@ -28,3 +28,8 @@ mqtt:
   broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
   client-id: ${MQTT_CLIENT_ID:scada-backend}
   topic: ${MQTT_TOPIC:scada/team5/plant/+/facility/+/energy}
+
+energy:
+  summary:
+    daily-cron: ${ENERGY_SUMMARY_DAILY_CRON:0 10 0 * * *}
+    monthly-cron: ${ENERGY_SUMMARY_MONTHLY_CRON:0 30 0 1 * *}

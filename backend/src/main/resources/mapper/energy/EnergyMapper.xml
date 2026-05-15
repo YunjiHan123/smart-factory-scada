@@ -54,6 +54,204 @@
         )
     </insert>
 
+    <delete id="deleteSummaries">
+        DELETE FROM energy_summaries
+        WHERE summary_type = #{summaryType}
+          AND summary_at &gt;= #{from}
+          AND summary_at &lt; #{to}
+    </delete>
+
+    <insert id="insertDailyFacilitySummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                DATE(measured_at) AS measured_date,
+                electricity_kwh,
+                gas_m3,
+                water_ton,
+                solar_kwh,
+                peak_kw,
+                LAG(electricity_kwh) OVER (
+                    PARTITION BY plant_id, facility_id, DATE(measured_at)
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_electricity_kwh,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id, DATE(measured_at)
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id, DATE(measured_at)
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton,
+                LAG(solar_kwh) OVER (
+                    PARTITION BY plant_id, facility_id, DATE(measured_at)
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_solar_kwh
+            FROM energy_measurements
+            WHERE measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+        ),
+        daily_usage AS (
+            SELECT
+                plant_id,
+                facility_id,
+                CAST(measured_date AS DATETIME) AS summary_at,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_electricity_kwh IS NULL THEN 0
+                        WHEN electricity_kwh &gt;= previous_electricity_kwh THEN electricity_kwh - previous_electricity_kwh
+                        ELSE 0
+                    END
+                ), 0) AS electricity_kwh,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_gas_m3 IS NULL THEN 0
+                        WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                        ELSE 0
+                    END
+                ), 0) AS gas_m3,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_water_ton IS NULL THEN 0
+                        WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                        ELSE 0
+                    END
+                ), 0) AS water_ton,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_solar_kwh IS NULL THEN 0
+                        WHEN solar_kwh &gt;= previous_solar_kwh THEN solar_kwh - previous_solar_kwh
+                        ELSE 0
+                    END
+                ), 0) AS solar_kwh,
+                COALESCE(MAX(peak_kw), 0) AS peak_kw
+            FROM ordered_measurements
+            GROUP BY plant_id, facility_id, measured_date
+        )
+        SELECT
+            plant_id,
+            facility_id,
+            'DAILY',
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            ROUND(electricity_kwh * 0.47, 2)
+        FROM daily_usage
+    </insert>
+
+    <insert id="insertDailyPlantSummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        SELECT
+            plant_id,
+            NULL,
+            'DAILY',
+            summary_at,
+            COALESCE(SUM(electricity_kwh), 0),
+            COALESCE(SUM(gas_m3), 0),
+            COALESCE(SUM(water_ton), 0),
+            COALESCE(SUM(solar_kwh), 0),
+            COALESCE(MAX(peak_kw), 0),
+            COALESCE(SUM(carbon_emission), 0)
+        FROM energy_summaries
+        WHERE summary_type = 'DAILY'
+          AND facility_id IS NOT NULL
+          AND summary_at &gt;= #{from}
+          AND summary_at &lt; #{to}
+        GROUP BY plant_id, summary_at
+    </insert>
+
+    <insert id="insertMonthlyFacilitySummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        SELECT
+            plant_id,
+            facility_id,
+            'MONTHLY',
+            #{from},
+            COALESCE(SUM(electricity_kwh), 0),
+            COALESCE(SUM(gas_m3), 0),
+            COALESCE(SUM(water_ton), 0),
+            COALESCE(SUM(solar_kwh), 0),
+            COALESCE(MAX(peak_kw), 0),
+            COALESCE(SUM(carbon_emission), 0)
+        FROM energy_summaries
+        WHERE summary_type = 'DAILY'
+          AND facility_id IS NOT NULL
+          AND summary_at &gt;= #{from}
+          AND summary_at &lt; #{to}
+        GROUP BY plant_id, facility_id
+    </insert>
+
+    <insert id="insertMonthlyPlantSummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        SELECT
+            plant_id,
+            NULL,
+            'MONTHLY',
+            #{from},
+            COALESCE(SUM(electricity_kwh), 0),
+            COALESCE(SUM(gas_m3), 0),
+            COALESCE(SUM(water_ton), 0),
+            COALESCE(SUM(solar_kwh), 0),
+            COALESCE(MAX(peak_kw), 0),
+            COALESCE(SUM(carbon_emission), 0)
+        FROM energy_summaries
+        WHERE summary_type = 'MONTHLY'
+          AND facility_id IS NOT NULL
+          AND summary_at = #{from}
+        GROUP BY plant_id
+    </insert>
+
     <select id="findMeasurements" resultMap="EnergyMeasurementResultMap">
         SELECT id, plant_id, facility_id, measured_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, created_at
         FROM energy_measurements

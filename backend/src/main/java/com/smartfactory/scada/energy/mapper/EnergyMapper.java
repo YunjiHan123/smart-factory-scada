@@ -16,6 +16,32 @@ public interface EnergyMapper {
 
 	void insertMeasurement(EnergyMeasurement measurement);
 
+	int deleteSummaries(
+		@Param("summaryType") SummaryType summaryType,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	int insertDailyFacilitySummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	int insertDailyPlantSummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	int insertMonthlyFacilitySummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	int insertMonthlyPlantSummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	List<EnergyMeasurement> findMeasurements(
 		@Param("plantId") Long plantId,
 		@Param("facilityId") Long facilityId,
