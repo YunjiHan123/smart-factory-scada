@@ -1,6 +1,22 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { Activity, Bolt, Droplets, Flame, Gauge, History, ListOrdered, RadioReceiver, Search, Zap } from 'lucide-vue-next'
+import {
+  Activity,
+  AlertTriangle,
+  Bolt,
+  Cloud,
+  Droplets,
+  Factory,
+  Flame,
+  Gauge,
+  History,
+  Leaf,
+  ListOrdered,
+  RadioReceiver,
+  Search,
+  SunMedium,
+  Zap,
+} from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
@@ -14,6 +30,8 @@ const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedUtilityDate = ref(formatDateInput(new Date()))
+const selectedEsgFrom = ref(formatDateInput(new Date()))
+const selectedEsgTo = ref(formatDateInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
@@ -41,6 +59,7 @@ const state = reactive({
   latestEnergy: null,
   peakDashboard: null,
   utilityDashboard: null,
+  esgDashboard: null,
   facilityDetail: null,
   alarms: [],
   esgScores: [],
@@ -215,6 +234,49 @@ function utilityPatternStyle(rate, tone) {
   }
 }
 
+function esgMetricIcon(key) {
+  return {
+    carbon: Cloud,
+    water: Droplets,
+    solar: SunMedium,
+    peak: Gauge,
+    electricity: Bolt,
+    gas: Flame,
+  }[key] || Activity
+}
+
+function esgMetricTone(key) {
+  return {
+    carbon: 'carbon',
+    water: 'water',
+    solar: 'solar',
+    peak: 'peak',
+    electricity: 'electric',
+    gas: 'gas',
+  }[key] || 'carbon'
+}
+
+function esgTrendClass(value, inverse = false) {
+  const numericValue = Number(value || 0)
+  if (numericValue === 0) {
+    return 'flat'
+  }
+  const good = inverse ? numericValue < 0 : numericValue > 0
+  return good ? 'down' : 'up'
+}
+
+function esgPlantMapStyle(index) {
+  const position = esgMapPositions[index % esgMapPositions.length]
+  return {
+    left: `${position.left}%`,
+    top: `${position.top}%`,
+  }
+}
+
+function esgBarHeight(score) {
+  return `${Math.max(8, Math.min(Number(score || 0) * 10, 100))}%`
+}
+
 function applySummaryDateRange(summaries) {
   if (!summaries.length || selectedDateFrom.value || selectedDateTo.value) {
     return
@@ -332,6 +394,95 @@ const utilityPatterns = computed(() => {
 })
 const utilityGasMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.gasUsageM3)))
 const utilityWaterMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.waterUsageTon)))
+const esgDashboard = computed(() => state.esgDashboard || {})
+const esgPlants = computed(() => esgDashboard.value.plants || [])
+const selectedEsgPlant = computed(
+  () =>
+    esgPlants.value.find((plant) => Number(plant.plantId) === Number(selectedPlantId.value)) ||
+    esgDashboard.value.selectedPlant ||
+    esgPlants.value[0] ||
+    null,
+)
+const esgMetrics = computed(() => {
+  const plant = selectedEsgPlant.value
+  if (!plant) {
+    return []
+  }
+  return [
+    {
+      key: 'carbon',
+      label: '탄소배출',
+      score: plant.carbonScore,
+      unit: 'tCO2e',
+      value: plant.carbonEmission,
+      changeRate: plant.changeRate,
+      sourceLabel: '전력/가스 사용량',
+    },
+    {
+      key: 'water',
+      label: '용수사용',
+      score: plant.waterScore,
+      unit: 'ton',
+      value: plant.waterUsage,
+      changeRate: plant.waterChangeRate,
+      sourceLabel: '용수 계측값',
+    },
+    {
+      key: 'solar',
+      label: '태양광발전',
+      score: plant.solarScore,
+      unit: 'kWh',
+      value: plant.solarGeneration,
+      changeRate: plant.solarChangeRate,
+      sourceLabel: '태양광 계측값',
+    },
+    {
+      key: 'peak',
+      label: '피크전력',
+      score: plant.peakScore,
+      unit: 'kW',
+      value: plant.intervalMaxPeakKw,
+      changeRate: plant.peakReductionRate,
+      sourceLabel: '15분 최대전력',
+    },
+    {
+      key: 'electricity',
+      label: '전력사용',
+      score: plant.electricityScore,
+      unit: 'kWh',
+      value: plant.electricityKwh,
+      changeRate: 0,
+      sourceLabel: '전력 계측값',
+    },
+    {
+      key: 'gas',
+      label: '가스사용',
+      score: plant.gasScore,
+      unit: 'm3',
+      value: plant.gasM3,
+      changeRate: 0,
+      sourceLabel: '가스 계측값',
+    },
+  ]
+})
+const esgAlerts = computed(() => esgDashboard.value.alerts || [])
+const esgLogic = computed(() => esgDashboard.value.logic || {})
+const esgCompareLabels = ['탄소', '용수', '태양광', '피크']
+const esgCompareRows = computed(() =>
+  esgPlants.value.map((plant) => ({
+    plantId: plant.plantId,
+    plantName: plant.plantName,
+    scores: [plant.carbonScore, plant.waterScore, plant.solarScore, plant.peakScore].map((score) => Number(score || 0)),
+  })),
+)
+const esgMapPositions = [
+  { left: 24, top: 20 },
+  { left: 58, top: 26 },
+  { left: 42, top: 44 },
+  { left: 70, top: 54 },
+  { left: 31, top: 66 },
+  { left: 56, top: 74 },
+]
 
 function routeTo(hash) {
   if (window.location.hash === `#${hash}`) {
@@ -456,13 +607,16 @@ async function logout() {
 
 async function loadInitial() {
   await run(async () => {
-    const [me, plants, esgScores] = await Promise.all([api.me(), api.plants(), api.esgScores({})])
+    const [me, plants] = await Promise.all([api.me(), api.plants()])
     state.me = me
     state.plants = plants
-    state.esgScores = esgScores
     syncingSelection.value = true
     selectedPlantId.value = selectedPlantId.value || me.plantId || plants[0]?.id || null
     syncingSelection.value = false
+    if (appMode.value === 'detail' && activePage.value !== 'facility') {
+      await loadActivePageData()
+      return
+    }
     await loadPlantData()
   })
 }
@@ -472,24 +626,59 @@ async function loadPlantData() {
     return
   }
 
-  const [overview, facilities, alarms, users] = await Promise.all([
+  const [overview, facilities] = await Promise.all([
     api.dashboard(selectedPlantId.value),
     api.facilities(selectedPlantId.value),
-    api.alarms({ plantId: selectedPlantId.value, limit: 20 }),
-    api.users({ page: 0, size: 20 }),
   ])
 
   state.overview = overview
   state.facilities = facilities
-  state.alarms = alarms
-  state.users = users.items || []
   syncingSelection.value = true
   selectedFacilityId.value = facilities[0]?.id || null
   syncingSelection.value = false
 
-  await loadEnergyData()
-  await loadPeakDashboard()
-  await loadUtilityDashboard()
+  await loadActivePageData()
+}
+
+async function loadActivePageData() {
+  if (appMode.value === 'login' || !selectedPlantId.value) {
+    return
+  }
+
+  if (appMode.value === 'scada') {
+    await loadOverviewEnergyData()
+    return
+  }
+
+  if (activePage.value === 'facility') {
+    await loadEnergyData()
+    return
+  }
+
+  if (activePage.value === 'peak') {
+    await loadPeakDashboard()
+    return
+  }
+
+  if (activePage.value === 'utility') {
+    await loadUtilityDashboard()
+    return
+  }
+
+  if (activePage.value === 'esg') {
+    await loadEsgDashboard()
+    return
+  }
+
+  if (activePage.value === 'users') {
+    const users = await api.users({ page: 0, size: 20 })
+    state.users = users.items || []
+    return
+  }
+
+  if (activePage.value === 'alarms') {
+    state.alarms = await api.alarms({ plantId: selectedPlantId.value, limit: 20 })
+  }
 }
 
 async function loadEnergyData() {
@@ -523,6 +712,30 @@ async function loadEnergyData() {
   startEnergyWebSocket()
 }
 
+async function loadOverviewEnergyData() {
+  if (!selectedPlantId.value) {
+    return
+  }
+
+  const summaryParams = {
+    plantId: selectedPlantId.value,
+    facilityId: selectedFacilityId.value || undefined,
+  }
+
+  const [summaries, latestEnergy] = await Promise.all([
+    api.energySummaries(summaryParams),
+    selectedFacilityId.value
+      ? api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+      : Promise.resolve(null),
+  ])
+
+  state.summaries = summaries
+  state.measurements = []
+  state.latestEnergy = latestEnergy
+  applySummaryDateRange(summaries)
+  startEnergyWebSocket()
+}
+
 async function loadFacilityDetail() {
   if (!selectedPlantId.value || !selectedFacilityId.value) {
     state.facilityDetail = null
@@ -533,8 +746,7 @@ async function loadFacilityDetail() {
     plantId: selectedPlantId.value,
     facilityId: selectedFacilityId.value,
     energyType: selectedEnergyType.value,
-    from: selectedDateFrom.value || undefined,
-    to: selectedDateTo.value || undefined,
+    ...dateRangeParams(selectedDateFrom.value, selectedDateTo.value),
   })
 }
 
@@ -559,6 +771,13 @@ async function loadUtilityDashboard() {
   state.utilityDashboard = await api.utilityDashboard({
     plantId: selectedPlantId.value,
     date: selectedUtilityDate.value || undefined,
+  })
+}
+
+async function loadEsgDashboard() {
+  state.esgDashboard = await api.esgEnvironmentDashboard({
+    plantId: selectedPlantId.value || undefined,
+    ...dateRangeParams(selectedEsgFrom.value, selectedEsgTo.value),
   })
 }
 
@@ -635,6 +854,10 @@ function stopEnergyWebSocket() {
 }
 
 async function refreshData() {
+  if (appMode.value === 'detail' && activePage.value !== 'facility') {
+    await run(loadActivePageData)
+    return
+  }
   await run(loadPlantData)
 }
 
@@ -667,38 +890,64 @@ function goDetail(page = 'facility') {
   routeTo(`/detail/${page}`)
 }
 
+function dateRangeParams(from, to) {
+  if (from && to && from > to) {
+    return { from: to, to: from }
+  }
+  return {
+    from: from || undefined,
+    to: to || undefined,
+  }
+}
+
 watch(selectedPlantId, () => {
   if (appMode.value !== 'login' && !syncingSelection.value) {
+    if (activePage.value === 'esg') {
+      if (!esgPlants.value.length) {
+        run(loadEsgDashboard)
+      }
+      return
+    }
+    if (appMode.value === 'detail' && activePage.value !== 'facility') {
+      run(loadActivePageData)
+      return
+    }
     run(loadPlantData)
+  }
+})
+
+watch(activePage, () => {
+  if (appMode.value !== 'login' && !syncingSelection.value) {
+    run(loadActivePageData)
   }
 })
 
 watch(selectedFacilityId, () => {
   if (appMode.value !== 'login' && !syncingSelection.value) {
-    run(loadEnergyData)
+    run(loadActivePageData)
   }
 })
 
 watch(selectedEnergyType, () => {
-  if (appMode.value !== 'login' && !syncingSelection.value) {
+  if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
     run(loadFacilityDetail)
   }
 })
 
 watch([selectedDateFrom, selectedDateTo], () => {
-  if (appMode.value !== 'login' && !syncingSelection.value) {
+  if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
     run(loadFacilityDetail)
   }
 })
 
 watch(selectedPeakDate, () => {
-  if (appMode.value !== 'login' && !syncingSelection.value) {
+  if (appMode.value !== 'login' && activePage.value === 'peak' && !syncingSelection.value) {
     run(loadPeakDashboard)
   }
 })
 
 watch(selectedUtilityDate, () => {
-  if (appMode.value !== 'login' && !syncingSelection.value) {
+  if (appMode.value !== 'login' && activePage.value === 'utility' && !syncingSelection.value) {
     run(loadUtilityDashboard)
   }
 })
@@ -901,7 +1150,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <section class="filter-card">
+      <section v-if="activePage !== 'esg'" class="filter-card">
         <label>
           사업장
           <select v-model.number="selectedPlantId">
@@ -1340,25 +1589,169 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-else-if="activePage === 'esg'" class="page-stack">
-        <article class="panel table-panel">
-          <h2>ESG 점수</h2>
-          <table>
-            <thead><tr><th>사업장</th><th>월</th><th>전기</th><th>가스</th><th>용수</th><th>피크</th><th>총점</th><th>등급</th></tr></thead>
-            <tbody>
-              <tr v-for="score in state.esgScores" :key="score.id">
-                <td>{{ score.plantName }}</td>
-                <td>{{ score.targetMonth }}</td>
-                <td>{{ formatNumber(score.electricityScore) }}</td>
-                <td>{{ formatNumber(score.gasScore) }}</td>
-                <td>{{ formatNumber(score.waterScore) }}</td>
-                <td>{{ formatNumber(score.peakScore) }}</td>
-                <td>{{ formatNumber(score.totalScore) }}</td>
-                <td><b>{{ score.grade }}</b></td>
-              </tr>
-            </tbody>
-          </table>
-        </article>
+      <section v-else-if="activePage === 'esg'" class="page-stack esg-performance-page">
+        <section class="esg-filter-row">
+          <label>
+            사업장
+            <select v-model.number="selectedPlantId">
+              <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
+            </select>
+          </label>
+          <label>
+            시작일
+            <input v-model="selectedEsgFrom" type="date" />
+          </label>
+          <label>
+            종료일
+            <input v-model="selectedEsgTo" type="date" />
+          </label>
+          <button class="primary-button compact" type="button" @click="run(loadEsgDashboard)">
+            <Search :size="17" /> 조회
+          </button>
+          <span class="live-pill">내부 환경 점수 0-10</span>
+        </section>
+
+        <section class="esg-kpi-grid">
+          <article class="esg-grade-card">
+            <span><Leaf :size="24" /></span>
+            <div>
+              <p>환경 종합 등급</p>
+              <b>{{ selectedEsgPlant?.grade || '-' }}</b>
+              <em>{{ formatNumber(selectedEsgPlant?.totalScore) }}/10</em>
+            </div>
+          </article>
+          <article v-for="metric in esgMetrics.slice(0, 4)" :key="metric.key" :class="['esg-kpi-card', esgMetricTone(metric.key)]">
+            <span><component :is="esgMetricIcon(metric.key)" :size="22" /></span>
+            <div>
+              <p>{{ metric.label }}</p>
+              <b>{{ formatNumber(metric.score) }}<small>/10</small></b>
+              <em :class="esgTrendClass(metric.changeRate, metric.key !== 'solar')">
+                전월 대비 {{ trendPrefix(metric.changeRate) }}{{ formatNumber(metric.changeRate) }}%
+              </em>
+            </div>
+          </article>
+        </section>
+
+        <section class="esg-main-grid">
+          <article class="panel esg-map-panel">
+            <div class="panel-title inline">
+              <h2>사업장 환경 등급 현황</h2>
+              <span>{{ selectedEsgFrom }} - {{ selectedEsgTo }}</span>
+            </div>
+            <div class="esg-map">
+              <div
+                v-for="(plant, index) in esgPlants"
+                :key="plant.plantId"
+                class="esg-map-pin"
+                :class="{ active: plant.plantId === selectedEsgPlant?.plantId }"
+                :style="esgPlantMapStyle(index)"
+              >
+                <Factory :size="17" />
+                <strong>{{ plant.grade }}</strong>
+                <span>{{ plant.plantName }}</span>
+                <b>{{ formatNumber(plant.totalScore) }}</b>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel esg-ranking-panel">
+            <div class="panel-title inline">
+              <h2>사업장 ESG 등급 순위</h2>
+              <ListOrdered :size="20" />
+            </div>
+            <div class="esg-ranking-list">
+              <button
+                v-for="plant in esgPlants"
+                :key="plant.plantId"
+                type="button"
+                :class="{ active: plant.plantId === selectedEsgPlant?.plantId }"
+                @click="selectedPlantId = plant.plantId"
+              >
+                <b>{{ plant.rank }}</b>
+                <span>{{ plant.plantName }}</span>
+                <strong>{{ plant.grade }}</strong>
+                <em>{{ formatNumber(plant.totalScore) }}</em>
+                <i :class="trendClass(plant.changeRate)">
+                  {{ trendPrefix(plant.changeRate) }}{{ formatNumber(plant.changeRate) }}%
+                </i>
+              </button>
+            </div>
+          </article>
+        </section>
+
+        <section class="esg-bottom-grid">
+          <article class="panel esg-compare-panel">
+            <div class="panel-title inline">
+              <h2>핵심 환경 항목 비교</h2>
+              <span>0-10 점수</span>
+            </div>
+            <div class="esg-grouped-chart">
+              <div v-for="plant in esgCompareRows" :key="plant.plantId" class="esg-chart-group">
+                <div class="esg-chart-bars">
+                  <i
+                    v-for="(score, index) in plant.scores"
+                    :key="`${plant.plantId}-${index}`"
+                    :class="`tone-${index}`"
+                    :style="{ height: esgBarHeight(score) }"
+                  ></i>
+                </div>
+                <span>{{ plant.plantName }}</span>
+              </div>
+            </div>
+            <div class="esg-chart-legend">
+              <span v-for="(label, index) in esgCompareLabels" :key="label"><i :class="`tone-${index}`"></i>{{ label }}</span>
+            </div>
+          </article>
+
+          <article class="panel esg-detail-panel">
+            <div class="panel-title inline">
+              <h2>선택 사업장 상세 분석</h2>
+              <span>{{ selectedEsgPlant?.plantName || '-' }}</span>
+            </div>
+            <div class="esg-detail-list">
+              <article v-for="metric in esgMetrics" :key="`detail-${metric.key}`">
+                <span :class="esgMetricTone(metric.key)"><component :is="esgMetricIcon(metric.key)" :size="18" /></span>
+                <div>
+                  <strong>{{ metric.label }}</strong>
+                  <small>{{ metric.sourceLabel }}</small>
+                </div>
+                <b>{{ formatNumber(metric.value) }} {{ metric.unit }}</b>
+                <em>{{ formatNumber(metric.score) }}/10</em>
+              </article>
+            </div>
+          </article>
+        </section>
+
+        <section class="esg-bottom-grid">
+          <article class="panel esg-alert-panel">
+            <div class="panel-title inline">
+              <h2>운영 알림</h2>
+              <AlertTriangle :size="20" />
+            </div>
+            <div class="esg-alert-list">
+              <article v-for="alert in esgAlerts" :key="`${alert.plantId}-${alert.title}`" :class="alert.level">
+                <b>{{ alert.title }}</b>
+                <span>{{ alert.plantName }} · {{ alert.message }}</span>
+              </article>
+              <article v-if="!esgAlerts.length" class="ok">
+                <b>특이 알림 없음</b>
+                <span>급증, 피크 초과, 데이터 누락 조건이 감지되지 않았습니다.</span>
+              </article>
+            </div>
+          </article>
+
+          <article class="panel esg-logic-panel">
+            <div class="panel-title inline">
+              <h2>등급 산정 로직</h2>
+              <span>내부 기준</span>
+            </div>
+            <div class="esg-logic-list">
+              <p>{{ esgLogic.normalization }}</p>
+              <p>{{ esgLogic.weight }}</p>
+              <p>{{ esgLogic.gradeMapping }}</p>
+            </div>
+          </article>
+        </section>
       </section>
 
       <section v-else-if="activePage === 'users'" class="page-stack">

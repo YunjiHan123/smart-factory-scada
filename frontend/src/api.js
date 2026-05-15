@@ -82,5 +82,6 @@ export const api = {
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),
   resolveAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}/resolve`, { method: 'PATCH' }),
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
+  esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),
 }
