@@ -8,6 +8,9 @@ const loading = ref(false)
 const errorMessage = ref('')
 const selectedPlantId = ref(null)
 const selectedFacilityId = ref(null)
+const selectedEnergyType = ref('ELECTRICITY')
+const selectedDateFrom = ref('')
+const selectedDateTo = ref('')
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
@@ -31,10 +34,22 @@ const state = reactive({
   summaries: [],
   measurements: [],
   latestEnergy: null,
+  facilityDetail: null,
   alarms: [],
   esgScores: [],
   users: [],
 })
+
+const energyTypeOptions = [
+  { value: 'ELECTRICITY', label: '전기', unit: 'kWh', tone: 'electric', iconPath: 'M13 2 4 14h7l-2 8 9-13h-7l2-7z' },
+  { value: 'GAS', label: '가스', unit: 'm3', tone: 'gas', iconPath: 'M12 22c-3.6 0-6-2.4-6-5.8 0-2.7 1.8-4.7 3.4-6.4 1.4-1.5 2.7-3 2.7-5.8 3.4 2.3 6 5.7 6 9.5 0 .5-.1 1-.2 1.4.7-.5 1.3-1.2 1.7-2.2.9 4.8-1.8 9.3-7.6 9.3z' },
+  { value: 'WATER', label: '용수', unit: 'ton', tone: 'water', iconPath: 'M12 22a7 7 0 0 1-7-7c0-4.9 7-13 7-13s7 8.1 7 13a7 7 0 0 1-7 7z' },
+  { value: 'SOLAR', label: '태양광', unit: 'kWh', tone: 'solar', iconPath: 'M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1' },
+]
+
+const equipmentIconPath = 'M3 21V9l6 3V9l6 3V5h6v16H3zM7 17h2M12 17h2M17 17h2M17 9h2'
+const trendIconPath = 'M4 16l5-5 4 4 7-8M14 7h6v6'
+const storageIconPath = 'M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zM5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6'
 
 const navItems = [
   { id: 'facility', label: '설비 조회', icon: 'F' },
@@ -66,6 +81,17 @@ const latestSummary = computed(() => state.overview?.latestEnergySummary || stat
 const latestEsg = computed(() => state.overview?.latestEsgScore || state.esgScores[0] || null)
 const recentSummaries = computed(() => state.summaries.slice(-8))
 const latestMeasuredAt = computed(() => metricValue(state.latestEnergy, 'measuredAt', 'measured_at'))
+const selectedEnergyMeta = computed(
+  () => energyTypeOptions.find((option) => option.value === selectedEnergyType.value) || energyTypeOptions[0],
+)
+const facilityDetailChart = computed(() => state.facilityDetail?.chart || [])
+const facilityDetailLogs = computed(() => state.facilityDetail?.logs || [])
+const facilityDetailMaxUsage = computed(() =>
+  Math.max(1, ...facilityDetailChart.value.map((point) => Number(point.usage || 0))),
+)
+const facilityTodayUsage = computed(() => state.facilityDetail?.todayUsage ?? 0)
+const facilityChangeAmount = computed(() => state.facilityDetail?.changeAmount ?? 0)
+const facilityChangeRate = computed(() => state.facilityDetail?.changeRate ?? 0)
 
 function metricValue(source, camelKey, snakeKey = camelKey) {
   return source?.[camelKey] ?? source?.[snakeKey]
@@ -97,6 +123,64 @@ function chartHeight(row) {
     return Math.max(12, Math.min(row.value / 12, 100))
   }
   return Math.max(12, Math.min(row.value / 1200, 100))
+}
+
+function facilityBarHeight(point) {
+  const value = Number(point?.usage || 0)
+  return Math.max(8, Math.round((value / facilityDetailMaxUsage.value) * 100))
+}
+
+function formatDate(value) {
+  if (!value) {
+    return '-'
+  }
+  return value.slice(0, 10)
+}
+
+function formatChartDate(value) {
+  const date = formatDate(value)
+  return date === '-' ? '-' : date.slice(5)
+}
+
+function formatDateInput(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function trendClass(value) {
+  const numericValue = Number(value || 0)
+  if (numericValue > 0) {
+    return 'up'
+  }
+  if (numericValue < 0) {
+    return 'down'
+  }
+  return 'flat'
+}
+
+function trendPrefix(value) {
+  return Number(value || 0) > 0 ? '+' : ''
+}
+
+function applySummaryDateRange(summaries) {
+  if (!summaries.length || selectedDateFrom.value || selectedDateTo.value) {
+    return
+  }
+  const dates = summaries
+    .map((summary) => formatDate(summary.summaryAt))
+    .filter((date) => date !== '-')
+  const latestDate = dates.at(-1)
+  if (!latestDate) {
+    return
+  }
+  const startDate = new Date(`${latestDate}T00:00:00`)
+  startDate.setDate(startDate.getDate() - 6)
+  syncingSelection.value = true
+  selectedDateFrom.value = formatDateInput(startDate)
+  selectedDateTo.value = latestDate
+  syncingSelection.value = false
 }
 
 const energyCards = computed(() => {
@@ -284,7 +368,24 @@ async function loadEnergyData() {
   state.summaries = summaries
   state.measurements = measurements
   state.latestEnergy = latestEnergy
+  applySummaryDateRange(summaries)
+  await loadFacilityDetail()
   startEnergyWebSocket()
+}
+
+async function loadFacilityDetail() {
+  if (!selectedPlantId.value || !selectedFacilityId.value) {
+    state.facilityDetail = null
+    return
+  }
+
+  state.facilityDetail = await api.energyFacilityDetail({
+    plantId: selectedPlantId.value,
+    facilityId: selectedFacilityId.value,
+    energyType: selectedEnergyType.value,
+    from: selectedDateFrom.value || undefined,
+    to: selectedDateTo.value || undefined,
+  })
 }
 
 async function loadLatestEnergy() {
@@ -381,6 +482,18 @@ watch(selectedPlantId, () => {
 watch(selectedFacilityId, () => {
   if (appMode.value !== 'login' && !syncingSelection.value) {
     run(loadEnergyData)
+  }
+})
+
+watch(selectedEnergyType, () => {
+  if (appMode.value !== 'login' && !syncingSelection.value) {
+    run(loadFacilityDetail)
+  }
+})
+
+watch([selectedDateFrom, selectedDateTo], () => {
+  if (appMode.value !== 'login' && !syncingSelection.value) {
+    run(loadFacilityDetail)
   }
 })
 
@@ -597,35 +710,121 @@ onUnmounted(() => {
           </select>
         </label>
         <label>
-          데이터 해상도
-          <input value="최근 요약" readonly />
+          에너지 종류
+          <select v-model="selectedEnergyType">
+            <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label>
+          시작일
+          <input v-model="selectedDateFrom" type="date" />
+        </label>
+        <label>
+          종료일
+          <input v-model="selectedDateTo" type="date" />
         </label>
       </section>
 
       <p v-if="errorMessage" class="api-error">{{ errorMessage }}</p>
 
       <section v-if="activePage === 'facility'" class="page-stack">
-        <div class="kpi-grid">
-          <article v-for="card in energyCards" :key="card.label" :class="['kpi-card', card.tone]">
-            <span>{{ card.label }}</span><b>{{ card.value }} <small>{{ card.unit }}</small></b>
-            <p>{{ selectedFacility?.name || '전체 설비' }}</p>
+        <section class="facility-status-layout">
+          <article class="panel facility-chart-panel">
+            <div class="panel-title inline">
+              <h2>설비 사용량 추이 <small>({{ selectedEnergyMeta.label }})</small></h2>
+              <span class="live-pill">{{ state.facilityDetail ? '상세 API 연동' : '데이터 대기' }}</span>
+            </div>
+            <div class="facility-bar-chart" :class="selectedEnergyMeta.tone">
+              <div v-for="point in facilityDetailChart" :key="point.date" class="facility-bar">
+                <b>{{ formatNumber(point.usage, 0) }}</b>
+                <i :style="{ height: `${facilityBarHeight(point)}%` }"></i>
+                <span>{{ formatChartDate(point.date) }}</span>
+              </div>
+            </div>
           </article>
-        </div>
-        <article class="panel table-panel">
-          <h2>측정 이력</h2>
+
+          <aside class="panel facility-detail-card" :class="selectedEnergyMeta.tone">
+            <div class="facility-card-head">
+              <span class="facility-device-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path :d="equipmentIconPath"></path>
+                </svg>
+              </span>
+              <div>
+                <h2>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</h2>
+                <p>{{ state.facilityDetail?.facilityType || selectedFacility?.facilityType || '-' }}</p>
+              </div>
+              <em :class="{ warn: state.facilityDetail?.facilityStatus !== 'RUNNING' }">
+                {{ statusLabel(state.facilityDetail?.facilityStatus || selectedFacility?.status) }}
+              </em>
+            </div>
+
+            <div class="facility-stat-list">
+              <article>
+                <span class="round-icon energy">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="selectedEnergyMeta.iconPath"></path>
+                  </svg>
+                </span>
+                <div>
+                  <p>금일 사용량</p>
+                  <strong>{{ formatNumber(facilityTodayUsage) }} <small>{{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small></strong>
+                </div>
+              </article>
+              <article>
+                <span class="round-icon trend">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="trendIconPath"></path>
+                  </svg>
+                </span>
+                <div>
+                  <p>전일 대비</p>
+                  <strong :class="trendClass(facilityChangeRate)">
+                    {{ trendPrefix(facilityChangeRate) }}{{ formatNumber(facilityChangeRate) }}<small>%</small>
+                  </strong>
+                  <small>{{ trendPrefix(facilityChangeAmount) }}{{ formatNumber(facilityChangeAmount) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small>
+                </div>
+              </article>
+              <article>
+                <span class="round-icon storage">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="storageIconPath"></path>
+                  </svg>
+                </span>
+                <div>
+                  <p>데이터 수집 상태</p>
+                  <strong>정상</strong>
+                  <small>최근 수집 {{ formatDateTime(state.facilityDetail?.latestMeasuredAt) }}</small>
+                </div>
+              </article>
+            </div>
+          </aside>
+        </section>
+
+        <article class="panel table-panel facility-log-panel">
+          <div class="panel-title inline">
+            <h2>사용 로그</h2>
+            <span>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '전체 설비' }}</span>
+          </div>
           <table>
             <thead>
-              <tr><th>측정 시각</th><th>설비 ID</th><th>전기</th><th>가스</th><th>용수</th><th>태양광</th><th>피크</th></tr>
+              <tr><th>일자</th><th>설비</th><th>에너지 종류</th><th>사용량</th><th>전일 대비</th><th>증감률</th><th>수집 시간</th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in state.measurements" :key="row.id">
+              <tr v-for="row in facilityDetailLogs" :key="row.measuredAt">
+                <td>{{ formatDate(row.measuredAt) }}</td>
+                <td>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</td>
+                <td>{{ selectedEnergyMeta.label }}</td>
+                <td>{{ formatNumber(row.usage) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</td>
+                <td :class="trendClass(row.changeAmount)">
+                  {{ trendPrefix(row.changeAmount) }}{{ formatNumber(row.changeAmount) }}
+                </td>
+                <td :class="trendClass(row.changeRate)">
+                  {{ trendPrefix(row.changeRate) }}{{ formatNumber(row.changeRate) }}%
+                </td>
                 <td>{{ formatDateTime(row.measuredAt) }}</td>
-                <td>{{ row.facilityId }}</td>
-                <td>{{ formatNumber(row.electricityKwh) }}</td>
-                <td>{{ formatNumber(row.gasM3) }}</td>
-                <td>{{ formatNumber(row.waterTon) }}</td>
-                <td>{{ formatNumber(row.solarKwh) }}</td>
-                <td>{{ formatNumber(row.peakKw) }}</td>
               </tr>
             </tbody>
           </table>

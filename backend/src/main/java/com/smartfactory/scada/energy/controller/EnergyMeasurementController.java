@@ -1,5 +1,6 @@
 package com.smartfactory.scada.energy.controller;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -11,7 +12,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.service.EnergyService;
@@ -47,6 +50,17 @@ public class EnergyMeasurementController {
 		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to
 	) {
 		return energyService.getSummaries(plantId, facilityId, summaryType, from, to);
+	}
+
+	@GetMapping("/facility-detail")
+	public EnergyFacilityDetailResponse getFacilityDetail(
+		@RequestParam Long plantId,
+		@RequestParam Long facilityId,
+		@RequestParam(required = false) EnergyType energyType,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
+	) {
+		return energyService.getFacilityDetail(plantId, facilityId, energyType, from, to);
 	}
 
 	@GetMapping("/latest/plants/{plantId}/facilities/{facilityId}")
