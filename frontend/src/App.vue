@@ -26,13 +26,17 @@ const loading = ref(false)
 const errorMessage = ref('')
 const selectedPlantId = ref(null)
 const selectedFacilityId = ref(null)
+const selectedFacilityLine = ref('PRESS')
+const selectedFacilityDate = ref(formatDateInput(new Date()))
 const selectedEnergyType = ref('ELECTRICITY')
 const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedUtilityDate = ref(formatDateInput(new Date()))
-const selectedEsgFrom = ref(formatDateInput(new Date()))
-const selectedEsgTo = ref(formatDateInput(new Date()))
+const utilityMeterSearch = ref('')
+const selectedEsgMonth = ref(formatMonthInput(new Date()))
+const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
+const selectedEsgTo = ref(formatMonthEndInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
@@ -72,6 +76,7 @@ const state = reactive({
   utilityDashboard: null,
   esgDashboard: null,
   facilityDetail: null,
+  facilityLineUsages: [],
   alarms: [],
   esgScores: [],
   users: [],
@@ -98,13 +103,45 @@ const navItems = [
 ]
 
 const validRoutes = ['facility', 'peak', 'utility', 'esg', 'users', 'alarms']
+const facilityLineOptions = [
+  { value: 'PRESS', label: '프레스' },
+  { value: 'BODY', label: '차체' },
+  { value: 'ASSEMBLY', label: '의장' },
+  { value: 'PAINT', label: '도장' },
+]
+const equipmentProcessNames = {
+  1: '메인 프레스기',
+  2: '블랭킹 프레스',
+  3: '코일 피더',
+  4: '금형 교환기',
+  5: '유압 펌프',
+  6: '배출 컨베이어',
+  7: '용접 로봇',
+  8: '지그 시스템',
+  9: '이송 컨베이어',
+  10: '스폿 용접기',
+  11: '검사 카메라',
+  12: '보정 장치',
+  13: '조립 로봇',
+  14: '체결 토크 장치',
+  15: '부품 공급 장치',
+  16: '도어 장착 장치',
+  17: '시트 장착 리프트',
+  18: '최종 검사기',
+  19: '전처리 탱크',
+  20: '분사 로봇',
+  21: '건조 오븐',
+  22: '배기 처리 설비',
+  23: '도료 공급 펌프',
+  24: '도막 검사기',
+}
 
 const activeMeta = computed(() => {
   const meta = {
-    facility: ['설비별 에너지 현황', '사업장, 설비, 에너지 요약, 최신 수집값을 확인합니다.'],
-    peak: ['피크 전력 현황', '피크 전력과 발생 알람을 확인합니다.'],
-    utility: ['가스/용수 모니터링', '가스와 용수 사용량을 설비 단위로 확인합니다.'],
-    esg: ['ESG 평가 지표', '사업장별 ESG 점수를 확인합니다.'],
+    facility: ['설비별 에너지 현황', '사업장, 설비 라인, 조회일 기준의 전기 사용량을 확인합니다.'],
+    peak: ['피크 전력 현황', '사업장별 피크 전력과 기준 초과 이력을 확인합니다.'],
+    utility: ['가스/용수 모니터링', '가스와 용수 사용량을 시간대와 계측기 단위로 확인합니다.'],
+    esg: ['ESG 평가 지표', '사업장별 월간 ESG 점수와 상세 지표를 확인합니다.'],
     users: ['사용자 관리', '사용자 계정과 권한 상태를 확인합니다.'],
     alarms: ['알람 관리', '발생 알람과 처리 상태를 확인합니다.'],
   }
@@ -117,6 +154,9 @@ const selectedPlant = computed(() =>
 )
 const selectedFacility = computed(() =>
   state.facilities.find((facility) => Number(facility.id) === Number(selectedFacilityId.value)),
+)
+const selectedFacilityLineMeta = computed(
+  () => facilityLineOptions.find((option) => option.value === selectedFacilityLine.value) || facilityLineOptions[0],
 )
 const latestSummary = computed(() => state.overview?.latestEnergySummary || state.summaries.at(-1) || null)
 const latestEsg = computed(() => state.overview?.latestEsgScore || state.esgScores[0] || null)
@@ -180,6 +220,30 @@ const latestMeasuredAt = computed(() => metricValue(liveEnergySource.value, 'mea
 const selectedEnergyMeta = computed(
   () => energyTypeOptions.find((option) => option.value === selectedEnergyType.value) || energyTypeOptions[0],
 )
+const facilityEquipmentCards = computed(() => {
+  if (state.facilityLineUsages.length) {
+    return state.facilityLineUsages
+  }
+  return state.facilities
+    .filter((facility) => facility.facilityType === selectedFacilityLine.value && Number(facility.id) >= 10000)
+    .map((facility) => ({
+      facilityId: facility.id,
+      facilityName: facility.name,
+      facilityType: facility.facilityType,
+      facilityStatus: facility.status,
+      usageDate: selectedFacilityDate.value,
+      todayUsageKwh: 0,
+      yesterdayUsageKwh: 0,
+      monthlyAverageKwh: 0,
+      todayVsYesterdayRate: 0,
+      todayVsMonthlyAverageRate: 0,
+      latestMeasuredAt: null,
+    }))
+})
+const selectedFacilityUsage = computed(() =>
+  facilityEquipmentCards.value.find((facility) => Number(facility.facilityId) === Number(selectedFacilityId.value)) ||
+  null,
+)
 const facilitySummaryChart = computed(() =>
   state.summaries.slice(-7).map((summary) => ({
     date: formatDate(summary.summaryAt),
@@ -216,10 +280,15 @@ const facilityTodayUsage = computed(() => {
   const liveValue = selectedLiveEnergy.value
     ? usageValueForEnergyType(selectedLiveEnergy.value, selectedEnergyType.value)
     : null
-  return liveValue ?? state.facilityDetail?.todayUsage ?? facilityDetailChart.value.at(-1)?.usage ?? 0
+  return liveValue ?? selectedFacilityUsage.value?.todayUsageKwh ?? state.facilityDetail?.todayUsage ?? facilityDetailChart.value.at(-1)?.usage ?? 0
 })
-const facilityChangeAmount = computed(() => state.facilityDetail?.changeAmount ?? facilityDetailLogs.value[0]?.changeAmount ?? 0)
-const facilityChangeRate = computed(() => state.facilityDetail?.changeRate ?? facilityDetailLogs.value[0]?.changeRate ?? 0)
+const facilityChangeAmount = computed(() =>
+  state.facilityDetail?.changeAmount ??
+  Number(selectedFacilityUsage.value?.todayUsageKwh || 0) - Number(selectedFacilityUsage.value?.yesterdayUsageKwh || 0),
+)
+const facilityChangeRate = computed(() =>
+  state.facilityDetail?.changeRate ?? selectedFacilityUsage.value?.todayVsYesterdayRate ?? facilityDetailLogs.value[0]?.changeRate ?? 0,
+)
 
 function metricValue(source, camelKey, snakeKey = camelKey) {
   return source?.[camelKey] ?? source?.[snakeKey]
@@ -355,6 +424,31 @@ function formatDateInput(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function formatMonthInput(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function formatMonthStartInput(date) {
+  return `${formatMonthInput(date)}-01`
+}
+
+function formatMonthEndInput(date) {
+  const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0)
+  return formatDateInput(monthEnd)
+}
+
+function monthRange(month) {
+  const [year, monthIndex] = String(month || formatMonthInput(new Date())).split('-').map(Number)
+  const start = new Date(year, monthIndex - 1, 1)
+  const end = new Date(year, monthIndex, 0)
+  return {
+    from: formatDateInput(start),
+    to: formatDateInput(end),
+  }
 }
 
 function trendClass(value) {
@@ -511,10 +605,27 @@ const peakMetrics = computed(() => {
 
   const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
   const thresholdKw = Number(metrics.thresholdKw || 1400)
+  const intervalPoints = peakTrendPoints.value
+  const currentIntervalAt = live.measuredAt
+  const recentCutoff = Date.parse(currentIntervalAt || '') - 15 * 60 * 1000
+  const recentRows = liveEnergyEntries.value.filter((row) => {
+    const measuredAt = Date.parse(row.measuredAt || '')
+    return Number(row.plantId) === Number(selectedPlantId.value) && measuredAt >= recentCutoff
+  })
+  const recentPeaks = recentRows.map((row) => metricNumber(row, 'peakKw', 'peak_kw')).filter((value) => value > 0)
+  const intervalAverageKw = recentPeaks.length
+    ? recentPeaks.reduce((sum, value) => sum + value, 0) / recentPeaks.length
+    : metrics.intervalAverageKw
+  const intervalMaxKw = recentPeaks.length
+    ? Math.max(...recentPeaks)
+    : metrics.intervalMaxKw
   return {
     ...metrics,
     currentKw,
     peakUsageRate: thresholdKw ? Math.min((currentKw / thresholdKw) * 100, 999) : 0,
+    intervalAverageKw,
+    intervalMaxKw,
+    intervalAt: currentIntervalAt || intervalPoints.at(-1)?.measuredAt || metrics.intervalAt,
     measuredAt: live.measuredAt,
   }
 })
@@ -550,7 +661,7 @@ const peakHistoryRows = computed(() =>
     peakUsageRate: row.peakUsageRate || row.peak_usage_rate,
     durationMinutes: row.durationMinutes || row.duration_minutes,
     thresholdKw: row.thresholdKw || row.threshold_kw,
-  })),
+  })).filter((row) => Number(row.peakUsageRate || 0) > 100),
 )
 const utilityMetrics = computed(() => {
   const metrics = state.utilityDashboard?.metrics || {}
@@ -561,18 +672,44 @@ const utilityMetrics = computed(() => {
 
   return {
     ...metrics,
-    gasTotalM3: metricNumber(live, 'gasM3', 'gas_m3'),
-    waterTotalTon: metricNumber(live, 'waterTon', 'water_ton'),
+    gasUsageM3: metricNumber(live, 'gasM3', 'gas_m3'),
+    waterUsageTon: metricNumber(live, 'waterTon', 'water_ton'),
   }
 })
 const utilityHourlyUsage = computed(() =>
-  (state.utilityDashboard?.hourlyUsage || []).map((point) => ({
-    measuredAt: point.measuredAt || point.measured_at,
-    gasUsageM3: Number(point.gasUsageM3 || point.gas_usage_m3 || 0),
-    waterUsageTon: Number(point.waterUsageTon || point.water_usage_ton || 0),
-  })),
+  Array.from({ length: 24 }, (_, hour) => {
+    const measuredAt = `${selectedUtilityDate.value}T${String(hour).padStart(2, '0')}:00:00`
+    const source = (state.utilityDashboard?.hourlyUsage || []).find((point) => {
+      const value = point.measuredAt || point.measured_at
+      return formatDate(value) === selectedUtilityDate.value && Number(formatTime(value).slice(0, 2)) === hour
+    })
+    const currentHour = formatDateInput(new Date()) === selectedUtilityDate.value && new Date().getHours() === hour
+    return {
+      measuredAt,
+      gasUsageM3: currentHour
+        ? metricNumber(selectedPlantLiveEnergy.value, 'gasM3', 'gas_m3')
+        : Number(source?.gasUsageM3 || source?.gas_usage_m3 || 0),
+      waterUsageTon: currentHour
+        ? metricNumber(selectedPlantLiveEnergy.value, 'waterTon', 'water_ton')
+        : Number(source?.waterUsageTon || source?.water_usage_ton || 0),
+    }
+  }),
 )
 const utilityMeterStatuses = computed(() => state.utilityDashboard?.meterStatuses || [])
+const filteredUtilityMeterStatuses = computed(() => {
+  const keyword = utilityMeterSearch.value.trim().toLowerCase()
+  if (!keyword) {
+    return utilityMeterStatuses.value
+  }
+  return utilityMeterStatuses.value.filter((meter) =>
+    [
+      meter.meterName,
+      meter.facilityName,
+      meter.meterType,
+      meter.communicationStatus,
+    ].some((value) => String(value || '').toLowerCase().includes(keyword)),
+  )
+})
 const utilityPatterns = computed(() => {
   const patternsByDate = new Map(
     (state.utilityDashboard?.patterns || []).map((pattern) => [
@@ -604,6 +741,14 @@ const utilityPatterns = computed(() => {
 })
 const utilityGasMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.gasUsageM3)))
 const utilityWaterMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.waterUsageTon)))
+const utilityGasPoints = computed(() => utilityLinePoints(utilityHourlyUsage.value, 'gasUsageM3', utilityGasMax.value))
+const utilityWaterPoints = computed(() =>
+  utilityLinePoints(utilityHourlyUsage.value, 'waterUsageTon', utilityWaterMax.value),
+)
+const utilityGasLinePath = computed(() => utilityPath(utilityGasPoints.value))
+const utilityWaterLinePath = computed(() => utilityPath(utilityWaterPoints.value))
+const utilityGasAreaPath = computed(() => utilityAreaPath(utilityGasPoints.value))
+const utilityWaterAreaPath = computed(() => utilityAreaPath(utilityWaterPoints.value))
 const esgDashboard = computed(() => state.esgDashboard || {})
 const esgPlants = computed(() => esgDashboard.value.plants || [])
 const selectedEsgPlant = computed(
@@ -796,6 +941,57 @@ function linePath(points, key, maxValue) {
     .join(' ')
 }
 
+function utilityLinePoints(points, key, maxValue) {
+  const width = 720
+  const height = 220
+  const paddingX = 26
+  const plotWidth = width - paddingX * 2
+  const gap = points.length <= 1 ? plotWidth : plotWidth / (points.length - 1)
+
+  return points.map((point, index) => {
+    const value = Number(point[key] || 0)
+    const ratio = Math.min(value / Math.max(maxValue, 1), 1)
+    return {
+      ...point,
+      chartValue: value,
+      x: Math.round(paddingX + index * gap),
+      y: Math.round(height - ratio * (height - 34) - 14),
+    }
+  })
+}
+
+function utilityPath(points) {
+  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+}
+
+function utilityAreaPath(points) {
+  if (!points.length) {
+    return ''
+  }
+  return `${utilityPath(points)} L ${points.at(-1).x} 220 L ${points[0].x} 220 Z`
+}
+
+function facilitySequence(facility) {
+  const id = Number(facility?.facilityId ?? facility?.id)
+  if (!Number.isFinite(id)) {
+    return null
+  }
+  return id >= 10000 ? id % 10000 : id % 100
+}
+
+function facilityCode(facility) {
+  const sequence = facilitySequence(facility)
+  if (!sequence) {
+    return facility?.facilityName || facility?.name || '-'
+  }
+  return `F-${String(sequence).padStart(3, '0')}`
+}
+
+function facilityProcessName(facility) {
+  const sequence = facilitySequence(facility)
+  return equipmentProcessNames[sequence] || facility?.facilityName || facility?.name || selectedFacilityLineMeta.value.label
+}
+
 function statusLabel(status) {
   const labels = {
     ACTIVE: '활성',
@@ -901,7 +1097,7 @@ async function loadPlantData() {
   state.overview = overview
   state.facilities = facilities
   syncingSelection.value = true
-  selectedFacilityId.value = facilities[0]?.id || null
+  selectedFacilityId.value = null
   syncingSelection.value = false
 
   await loadActivePageData()
@@ -953,28 +1149,41 @@ async function loadEnergyData() {
     return
   }
 
+  selectedEnergyType.value = 'ELECTRICITY'
+  selectedDateFrom.value = selectedFacilityDate.value
+  selectedDateTo.value = selectedFacilityDate.value
+
   const summaryParams = {
     plantId: selectedPlantId.value,
-    facilityId: selectedFacilityId.value || undefined,
+    summaryType: 'DAILY',
+    from: `${selectedFacilityDate.value}T00:00:00`,
+    to: `${selectedFacilityDate.value}T23:59:59`,
   }
   const measurementParams = {
     plantId: selectedPlantId.value,
     facilityId: selectedFacilityId.value || undefined,
+    from: `${selectedFacilityDate.value}T00:00:00`,
+    to: `${selectedFacilityDate.value}T23:59:59`,
     limit: 20,
   }
 
-  const [summaries, measurements, latestEnergy] = await Promise.all([
+  const [summaries, measurements, latestEnergy, facilityLineUsages] = await Promise.all([
     api.energySummaries(summaryParams),
     api.energyMeasurements(measurementParams),
     selectedFacilityId.value
       ? api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
       : Promise.resolve(null),
+    api.energyFacilityLine({
+      plantId: selectedPlantId.value,
+      facilityType: selectedFacilityLine.value,
+      date: selectedFacilityDate.value,
+    }).catch(() => []),
   ])
 
   state.summaries = summaries
   state.measurements = measurements
   state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
-  applySummaryDateRange(summaries)
+  state.facilityLineUsages = facilityLineUsages
   await loadFacilityDetail()
   startEnergyWebSocket()
   startEnergyPolling()
@@ -1044,9 +1253,12 @@ async function loadUtilityDashboard() {
 }
 
 async function loadEsgDashboard() {
+  const range = monthRange(selectedEsgMonth.value)
+  selectedEsgFrom.value = range.from
+  selectedEsgTo.value = range.to
   state.esgDashboard = await api.esgEnvironmentDashboard({
     plantId: selectedPlantId.value || undefined,
-    ...dateRangeParams(selectedEsgFrom.value, selectedEsgTo.value),
+    ...dateRangeParams(range.from, range.to),
   })
 }
 
@@ -1212,6 +1424,10 @@ function goDetail(page = 'facility') {
   routeTo(`/detail/${page}`)
 }
 
+function selectFacilityCard(facilityId) {
+  selectedFacilityId.value = facilityId
+}
+
 function dateRangeParams(from, to) {
   if (from && to && from > to) {
     return { from: to, to: from }
@@ -1250,13 +1466,15 @@ watch(selectedFacilityId, () => {
   }
 })
 
-watch(selectedEnergyType, () => {
+watch([selectedFacilityLine, selectedFacilityDate], () => {
   if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
-    run(loadFacilityDetail)
+    selectedFacilityId.value = null
+    state.facilityDetail = null
+    run(loadEnergyData)
   }
 })
 
-watch([selectedDateFrom, selectedDateTo], () => {
+watch(selectedEnergyType, () => {
   if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
     run(loadFacilityDetail)
   }
@@ -1271,6 +1489,12 @@ watch(selectedPeakDate, () => {
 watch(selectedUtilityDate, () => {
   if (appMode.value !== 'login' && activePage.value === 'utility' && !syncingSelection.value) {
     run(loadUtilityDashboard)
+  }
+})
+
+watch(selectedEsgMonth, () => {
+  if (appMode.value !== 'login' && activePage.value === 'esg' && !syncingSelection.value) {
+    run(loadEsgDashboard)
   }
 })
 
@@ -1298,7 +1522,7 @@ onUnmounted(() => {
     <section class="login-page">
       <article class="login-visual">
         <p>Smart Factory SCADA</p>
-        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다</h2>
+        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다.</h2>
         <div class="login-lines"></div>
       </article>
       <form class="login-card" @submit.prevent="login">
@@ -1481,137 +1705,127 @@ onUnmounted(() => {
             <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          설비
-          <select v-model.number="selectedFacilityId">
-            <option :value="null">전체 설비</option>
-            <option v-for="facility in state.facilities" :key="facility.id" :value="facility.id">
-              {{ facility.name }}
+        <label v-if="activePage === 'facility'">
+          설비 라인
+          <select v-model="selectedFacilityLine">
+            <option v-for="line in facilityLineOptions" :key="line.value" :value="line.value">
+              {{ line.label }}
             </option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          에너지 종류
-          <select v-model="selectedEnergyType">
-            <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          시작일
-          <input v-model="selectedDateFrom" type="date" />
-        </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          종료일
-          <input v-model="selectedDateTo" type="date" />
+        <label v-if="activePage === 'facility'">
+          조회일
+          <input v-model="selectedFacilityDate" type="date" />
         </label>
       </section>
 
       <p v-if="errorMessage" class="api-error">{{ errorMessage }}</p>
 
-      <section v-if="activePage === 'facility'" class="page-stack">
-        <section class="facility-status-layout">
-          <article class="panel facility-chart-panel">
+      <section v-if="activePage === 'facility'" class="page-stack facility-monitor-page">
+        <section class="facility-status-layout facility-card-layout">
+          <article class="panel facility-chart-panel facility-equipment-panel">
             <div class="panel-title inline">
-              <h2>설비 사용량 추이 <small>({{ selectedEnergyMeta.label }})</small></h2>
-              <span class="live-pill">{{ state.facilityDetail ? '상세 API 연동' : '데이터 대기' }}</span>
+              <h2>설비 사용량 추이 <small>({{ selectedFacilityLineMeta.label }} / 전기)</small></h2>
+              <span class="live-pill">{{ liveEnergyFresh ? '실시간 반영' : '일별 데이터' }}</span>
             </div>
-            <div class="facility-bar-chart" :class="selectedEnergyMeta.tone">
-              <div v-for="point in facilityDetailChart" :key="point.date" class="facility-bar">
-                <b>{{ formatNumber(point.usage, 0) }}</b>
-                <i :style="{ height: `${facilityBarHeight(point)}%` }"></i>
-                <span>{{ formatChartDate(point.date) }}</span>
-              </div>
+            <div class="facility-equipment-grid">
+              <button
+                v-for="facility in facilityEquipmentCards"
+                :key="facility.facilityId"
+                type="button"
+                :class="['facility-equipment-card', { active: Number(selectedFacilityId) === Number(facility.facilityId) }]"
+                @click="selectFacilityCard(facility.facilityId)"
+              >
+                <span class="facility-equipment-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="equipmentIconPath"></path>
+                  </svg>
+                </span>
+                <strong>{{ facilityCode(facility) }}</strong>
+                <small>{{ facilityProcessName(facility) }}</small>
+                <b>{{ formatNumber(facility.todayUsageKwh, 0) }} <em>kWh</em></b>
+                <i :class="trendClass(facility.todayVsMonthlyAverageRate)">
+                  월 평균 {{ trendPrefix(facility.todayVsMonthlyAverageRate) }}{{ formatNumber(facility.todayVsMonthlyAverageRate) }}%
+                </i>
+                <span class="facility-month-average">월 평균 {{ formatNumber(facility.monthlyAverageKwh, 0) }} kWh</span>
+              </button>
+              <article v-if="!facilityEquipmentCards.length" class="facility-empty-card">
+                선택한 라인에 표시할 설비 데이터가 없습니다.
+              </article>
             </div>
           </article>
 
           <aside class="panel facility-detail-card" :class="selectedEnergyMeta.tone">
-            <div class="facility-card-head">
+            <template v-if="selectedFacilityUsage">
+              <div class="facility-card-head">
+                <span class="facility-device-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="equipmentIconPath"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h2>{{ facilityCode(selectedFacilityUsage) }}</h2>
+                  <p>{{ facilityProcessName(selectedFacilityUsage) }}</p>
+                </div>
+                <em :class="{ warn: selectedFacilityUsage.facilityStatus !== 'RUNNING' }">
+                  {{ statusLabel(selectedFacilityUsage.facilityStatus) }}
+                </em>
+              </div>
+
+              <div class="facility-stat-list">
+                <article>
+                  <span class="round-icon energy">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="selectedEnergyMeta.iconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>금일 사용량</p>
+                    <strong>{{ formatNumber(facilityTodayUsage, 0) }} <small>kWh</small></strong>
+                  </div>
+                </article>
+                <article>
+                  <span class="round-icon trend">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="trendIconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>전일 사용량</p>
+                    <strong>{{ formatNumber(selectedFacilityUsage.yesterdayUsageKwh, 0) }} <small>kWh</small></strong>
+                    <small :class="trendClass(selectedFacilityUsage.todayVsYesterdayRate)">
+                      전일 대비 {{ trendPrefix(selectedFacilityUsage.todayVsYesterdayRate) }}{{ formatNumber(selectedFacilityUsage.todayVsYesterdayRate) }}%
+                    </small>
+                  </div>
+                </article>
+                <article>
+                  <span class="round-icon storage">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="storageIconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>월 평균 사용량</p>
+                    <strong>{{ formatNumber(selectedFacilityUsage.monthlyAverageKwh, 0) }} <small>kWh</small></strong>
+                    <small :class="trendClass(selectedFacilityUsage.todayVsMonthlyAverageRate)">
+                      월 평균 대비 {{ trendPrefix(selectedFacilityUsage.todayVsMonthlyAverageRate) }}{{ formatNumber(selectedFacilityUsage.todayVsMonthlyAverageRate) }}%
+                    </small>
+                  </div>
+                </article>
+              </div>
+            </template>
+            <div v-else class="facility-detail-empty">
               <span class="facility-device-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path :d="equipmentIconPath"></path>
                 </svg>
               </span>
-              <div>
-                <h2>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</h2>
-                <p>{{ state.facilityDetail?.facilityType || selectedFacility?.facilityType || '-' }}</p>
-              </div>
-              <em :class="{ warn: state.facilityDetail?.facilityStatus !== 'RUNNING' }">
-                {{ statusLabel(state.facilityDetail?.facilityStatus || selectedFacility?.status) }}
-              </em>
-            </div>
-
-            <div class="facility-stat-list">
-              <article>
-                <span class="round-icon energy">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="selectedEnergyMeta.iconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>금일 사용량</p>
-                  <strong>{{ formatNumber(facilityTodayUsage) }} <small>{{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small></strong>
-                </div>
-              </article>
-              <article>
-                <span class="round-icon trend">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="trendIconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>전일 대비</p>
-                  <strong :class="trendClass(facilityChangeRate)">
-                    {{ trendPrefix(facilityChangeRate) }}{{ formatNumber(facilityChangeRate) }}<small>%</small>
-                  </strong>
-                  <small>{{ trendPrefix(facilityChangeAmount) }}{{ formatNumber(facilityChangeAmount) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small>
-                </div>
-              </article>
-              <article>
-                <span class="round-icon storage">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="storageIconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>데이터 수집 상태</p>
-                  <strong>정상</strong>
-                  <small>최근 수집 {{ formatDateTime(state.facilityDetail?.latestMeasuredAt) }}</small>
-                </div>
-              </article>
+              <strong>설비를 선택하세요</strong>
+              <p>왼쪽 설비 카드 중 하나를 클릭하면 설비 정보가 표시됩니다.</p>
             </div>
           </aside>
         </section>
-
-        <article class="panel table-panel facility-log-panel">
-          <div class="panel-title inline">
-            <h2>사용 로그</h2>
-            <span>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '전체 설비' }}</span>
-          </div>
-          <table>
-            <thead>
-              <tr><th>일자</th><th>설비</th><th>에너지 종류</th><th>사용량</th><th>전일 대비</th><th>증감률</th><th>수집 시간</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in facilityDetailLogs" :key="row.measuredAt">
-                <td>{{ formatDate(row.measuredAt) }}</td>
-                <td>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</td>
-                <td>{{ selectedEnergyMeta.label }}</td>
-                <td>{{ formatNumber(row.usage) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</td>
-                <td :class="trendClass(row.changeAmount)">
-                  {{ trendPrefix(row.changeAmount) }}{{ formatNumber(row.changeAmount) }}
-                </td>
-                <td :class="trendClass(row.changeRate)">
-                  {{ trendPrefix(row.changeRate) }}{{ formatNumber(row.changeRate) }}%
-                </td>
-                <td>{{ formatDateTime(row.measuredAt) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </article>
       </section>
-
       <section v-else-if="activePage === 'peak'" class="page-stack peak-monitor-page">
         <section class="peak-filter-row">
           <label>
@@ -1654,7 +1868,7 @@ onUnmounted(() => {
             <div>
               <p>15분 최대 전력</p>
               <b>{{ formatNumber(peakMetrics.intervalMaxKw) }}<small> kW</small></b>
-              <em>금일 집계 기준</em>
+              <em>전날 평균 대비 {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
             </div>
           </article>
         </section>
@@ -1727,7 +1941,7 @@ onUnmounted(() => {
 
         <article class="panel table-panel peak-history-panel">
           <div class="panel-title inline">
-            <h2>피크 이력</h2>
+            <h2>피크 발생 이력</h2>
             <History :size="20" />
           </div>
           <table>
@@ -1753,7 +1967,7 @@ onUnmounted(() => {
                 <td>{{ row.exceeded ? '피크 초과' : '-' }}</td>
               </tr>
               <tr v-if="!peakHistoryRows.length">
-                <td colspan="7">조회된 피크 이력이 없습니다.</td>
+                <td colspan="7">조회일에 피크 발생 이력이 없습니다.</td>
               </tr>
             </tbody>
           </table>
@@ -1788,7 +2002,7 @@ onUnmounted(() => {
             <div>
               <p>가스 적산량</p>
               <b>{{ formatNumber(utilityMetrics.gasTotalM3) }}<small> m3</small></b>
-              <em>최신 누적 계량값</em>
+              <em>이번 달 누적 사용량</em>
             </div>
           </article>
           <article class="utility-kpi-card water">
@@ -1806,7 +2020,7 @@ onUnmounted(() => {
             <div>
               <p>용수 적산량</p>
               <b>{{ formatNumber(utilityMetrics.waterTotalTon) }}<small> ton</small></b>
-              <em>최신 누적 계량값</em>
+              <em>이번 달 누적 사용량</em>
             </div>
           </article>
         </section>
@@ -1817,12 +2031,31 @@ onUnmounted(() => {
               <h2>가스 시간대별 사용량</h2>
               <span>단위: m3</span>
             </div>
-            <div class="utility-bar-chart">
-              <div v-for="point in utilityHourlyUsage" :key="`gas-${point.measuredAt}`" class="utility-bar">
-                <b>{{ formatNumber(point.gasUsageM3) }}</b>
-                <i :style="{ height: `${utilityBarHeight(point.gasUsageM3, utilityGasMax)}%` }"></i>
-                <span>{{ formatTime(point.measuredAt) }}</span>
-              </div>
+            <div class="utility-line-chart gas">
+              <svg viewBox="0 0 720 260" role="img" aria-label="가스 시간대별 사용량">
+                <defs>
+                  <linearGradient id="gasLineFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#f97316" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#f97316" stop-opacity="0.03" />
+                  </linearGradient>
+                </defs>
+                <g class="utility-grid-lines">
+                  <line v-for="row in 5" :key="`gas-grid-${row}`" x1="26" x2="694" :y1="row * 40" :y2="row * 40" />
+                </g>
+                <path class="utility-area gas" :d="utilityGasAreaPath" />
+                <path class="utility-line gas" :d="utilityGasLinePath" />
+                <g v-for="point in utilityGasPoints" :key="`gas-point-${point.measuredAt}`">
+                  <circle class="utility-dot gas" :cx="point.x" :cy="point.y" r="4"></circle>
+                  <title>{{ formatTime(point.measuredAt) }} · {{ formatNumber(point.chartValue) }} m3</title>
+                </g>
+                <g class="utility-x-axis">
+                  <template v-for="(point, index) in utilityGasPoints" :key="`gas-axis-${point.measuredAt}`">
+                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
+                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    </text>
+                  </template>
+                </g>
+              </svg>
             </div>
           </article>
 
@@ -1831,12 +2064,31 @@ onUnmounted(() => {
               <h2>용수 시간대별 사용량</h2>
               <span>단위: ton</span>
             </div>
-            <div class="utility-bar-chart">
-              <div v-for="point in utilityHourlyUsage" :key="`water-${point.measuredAt}`" class="utility-bar">
-                <b>{{ formatNumber(point.waterUsageTon) }}</b>
-                <i :style="{ height: `${utilityBarHeight(point.waterUsageTon, utilityWaterMax)}%` }"></i>
-                <span>{{ formatTime(point.measuredAt) }}</span>
-              </div>
+            <div class="utility-line-chart water">
+              <svg viewBox="0 0 720 260" role="img" aria-label="용수 시간대별 사용량">
+                <defs>
+                  <linearGradient id="waterLineFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.03" />
+                  </linearGradient>
+                </defs>
+                <g class="utility-grid-lines">
+                  <line v-for="row in 5" :key="`water-grid-${row}`" x1="26" x2="694" :y1="row * 40" :y2="row * 40" />
+                </g>
+                <path class="utility-area water" :d="utilityWaterAreaPath" />
+                <path class="utility-line water" :d="utilityWaterLinePath" />
+                <g v-for="point in utilityWaterPoints" :key="`water-point-${point.measuredAt}`">
+                  <circle class="utility-dot water" :cx="point.x" :cy="point.y" r="4"></circle>
+                  <title>{{ formatTime(point.measuredAt) }} · {{ formatNumber(point.chartValue) }} ton</title>
+                </g>
+                <g class="utility-x-axis">
+                  <template v-for="(point, index) in utilityWaterPoints" :key="`water-axis-${point.measuredAt}`">
+                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
+                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    </text>
+                  </template>
+                </g>
+              </svg>
             </div>
           </article>
         </section>
@@ -1844,37 +2096,46 @@ onUnmounted(() => {
         <section class="utility-bottom-grid">
           <article class="panel table-panel utility-meter-panel">
             <div class="panel-title inline">
-              <h2>계측기별 상태 조회</h2>
+              <h2>계측기 상태 조회</h2>
               <RadioReceiver :size="20" />
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>계측기명</th>
-                  <th>구분</th>
-                  <th>현재값</th>
-                  <th>단위</th>
-                  <th>최근 수신</th>
-                  <th>통신 상태</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="meter in utilityMeterStatuses" :key="`${meter.meterType}-${meter.facilityId}`">
-                  <td>{{ meter.meterName || meter.facilityName }}</td>
-                  <td :class="meter.meterType === 'GAS' ? 'utility-gas-text' : 'utility-water-text'">
-                    {{ meterTypeLabel(meter.meterType) }}
-                  </td>
-                  <td>{{ formatNumber(meter.currentValue) }}</td>
-                  <td>{{ meter.unit }}</td>
-                  <td>{{ formatDateTime(meter.lastReceivedAt) }}</td>
-                  <td>
-                    <span :class="['badge', meterStatusClass(meter.communicationStatus)]">
-                      {{ meterStatusLabel(meter.communicationStatus) }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <div class="utility-meter-toolbar">
+              <input v-model="utilityMeterSearch" type="search" placeholder="계측기명, 설비명, 상태 검색" />
+              <span>{{ filteredUtilityMeterStatuses.length }} / {{ utilityMeterStatuses.length }}</span>
+            </div>
+            <div class="utility-meter-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>계측기명</th>
+                    <th>구분</th>
+                    <th>현재값</th>
+                    <th>단위</th>
+                    <th>최근 수신</th>
+                    <th>통신 상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="meter in filteredUtilityMeterStatuses" :key="`${meter.meterType}-${meter.facilityId}`">
+                    <td>{{ meter.meterName || meter.facilityName }}</td>
+                    <td :class="meter.meterType === 'GAS' ? 'utility-gas-text' : 'utility-water-text'">
+                      {{ meterTypeLabel(meter.meterType) }}
+                    </td>
+                    <td>{{ formatNumber(meter.currentValue) }}</td>
+                    <td>{{ meter.unit }}</td>
+                    <td>{{ formatDateTime(meter.lastReceivedAt) }}</td>
+                    <td>
+                      <span :class="['badge', meterStatusClass(meter.communicationStatus)]">
+                        {{ meterStatusLabel(meter.communicationStatus) }}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr v-if="!filteredUtilityMeterStatuses.length">
+                    <td colspan="6">검색 결과가 없습니다.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </article>
 
           <article class="panel utility-pattern-panel">
@@ -1922,17 +2183,13 @@ onUnmounted(() => {
             </select>
           </label>
           <label>
-            시작일
-            <input v-model="selectedEsgFrom" type="date" />
-          </label>
-          <label>
-            종료일
-            <input v-model="selectedEsgTo" type="date" />
+            조회월
+            <input v-model="selectedEsgMonth" type="month" />
           </label>
           <button class="primary-button compact" type="button" @click="run(loadEsgDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">내부 환경 점수 0-10</span>
+          <span class="live-pill">월간 환경 점수 0-10</span>
         </section>
 
         <section class="esg-kpi-grid">
@@ -2006,7 +2263,7 @@ onUnmounted(() => {
         <section class="esg-bottom-grid">
           <article class="panel esg-compare-panel">
             <div class="panel-title inline">
-              <h2>핵심 환경 항목 비교</h2>
+              <h2>통합 환경 항목 비교</h2>
               <span>0-10 점수</span>
             </div>
             <div class="esg-grouped-chart">
@@ -2042,37 +2299,6 @@ onUnmounted(() => {
                 <b>{{ formatNumber(metric.value) }} {{ metric.unit }}</b>
                 <em>{{ formatNumber(metric.score) }}/10</em>
               </article>
-            </div>
-          </article>
-        </section>
-
-        <section class="esg-bottom-grid">
-          <article class="panel esg-alert-panel">
-            <div class="panel-title inline">
-              <h2>운영 알림</h2>
-              <AlertTriangle :size="20" />
-            </div>
-            <div class="esg-alert-list">
-              <article v-for="alert in esgAlerts" :key="`${alert.plantId}-${alert.title}`" :class="alert.level">
-                <b>{{ alert.title }}</b>
-                <span>{{ alert.plantName }} · {{ alert.message }}</span>
-              </article>
-              <article v-if="!esgAlerts.length" class="ok">
-                <b>특이 알림 없음</b>
-                <span>급증, 피크 초과, 데이터 누락 조건이 감지되지 않았습니다.</span>
-              </article>
-            </div>
-          </article>
-
-          <article class="panel esg-logic-panel">
-            <div class="panel-title inline">
-              <h2>등급 산정 로직</h2>
-              <span>내부 기준</span>
-            </div>
-            <div class="esg-logic-list">
-              <p>{{ esgLogic.normalization }}</p>
-              <p>{{ esgLogic.weight }}</p>
-              <p>{{ esgLogic.gradeMapping }}</p>
             </div>
           </article>
         </section>
@@ -2112,7 +2338,7 @@ onUnmounted(() => {
                 <td>{{ formatNumber(alarm.value) }}</td>
                 <td>{{ formatNumber(alarm.thresholdValue) }}</td>
                 <td><span :class="['badge', alarm.status === 'RESOLVED' ? 'ok' : 'warn']">{{ statusLabel(alarm.status) }}</span></td>
-                <td><button class="light-button" type="button" :disabled="alarm.status === 'RESOLVED'" @click="resolveAlarm(alarm.id)">처리</button></td>
+                <td><button class="light-button" type="button" :disabled="alarm.status === 'RESOLVED'" @click="resolveAlarm(alarm.id)">泥섎━</button></td>
               </tr>
             </tbody>
           </table>
@@ -2121,3 +2347,4 @@ onUnmounted(() => {
     </section>
   </main>
 </template>
+
