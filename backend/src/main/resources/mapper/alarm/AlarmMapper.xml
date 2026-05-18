@@ -90,6 +90,12 @@
           AND status = 'OCCURRED'
     </update>
 
+    <delete id="deleteResolved">
+        DELETE FROM alarms
+        WHERE id = #{id}
+          AND status = 'RESOLVED'
+    </delete>
+
     <select id="countOccurred" resultType="long">
         SELECT COUNT(*)
         FROM alarms

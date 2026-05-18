@@ -55,6 +55,7 @@ public class EnergyService {
 	private static final int DEFAULT_LIMIT = 100;
 	private static final int MAX_LIMIT = 500;
 	private static final BigDecimal FACILITY_PEAK_THRESHOLD_KW = BigDecimal.valueOf(1400);
+	private static final BigDecimal PLANT_PEAK_THRESHOLD_KW = BigDecimal.valueOf(8500);
 	private static final BigDecimal ELECTRICITY_WARNING_DELTA = BigDecimal.valueOf(80);
 	private static final BigDecimal ELECTRICITY_CRITICAL_DELTA = BigDecimal.valueOf(130);
 	private static final BigDecimal GAS_WARNING_DELTA = BigDecimal.valueOf(8);
@@ -225,6 +226,7 @@ public class EnergyService {
 	public List<EnergyFacilityLineUsageResponse> getFacilityLineUsages(
 		Long plantId,
 		FacilityType facilityType,
+		EnergyType energyType,
 		LocalDate targetDate
 	) {
 		if (plantId == null || facilityType == null) {
@@ -232,19 +234,27 @@ public class EnergyService {
 		}
 
 		LocalDate requestedDate = targetDate == null ? LocalDate.now() : targetDate;
+		EnergyType resolvedEnergyType = energyType == null ? EnergyType.ELECTRICITY : energyType;
 		LocalDate usageDate = energyMapper.findFacilityLineSummaryDate(plantId, facilityType, requestedDate)
+			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType)
+				.filter(requestedDate::equals))
 			.or(() -> energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType))
+			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType))
 			.orElse(requestedDate);
+		LocalDateTime usageTo = usageDate.equals(LocalDate.now())
+			? LocalDateTime.now()
+			: usageDate.plusDays(1).atStartOfDay();
 
 		return energyMapper.findFacilityLineUsages(
 			plantId,
 			facilityType,
+			resolvedEnergyType.name(),
 			usageDate,
 			usageDate.minusDays(1),
 			usageDate.withDayOfMonth(1),
 			usageDate.plusMonths(1).withDayOfMonth(1),
 			usageDate.atStartOfDay(),
-			usageDate.plusDays(1).atStartOfDay()
+			usageTo
 		);
 	}
 
@@ -461,11 +471,7 @@ public class EnergyService {
 	}
 
 	private BigDecimal peakThresholdForPlant(Long plantId) {
-		int facilityCount = facilityMapper.findByPlantId(plantId).size();
-		if (facilityCount <= 0) {
-			return FACILITY_PEAK_THRESHOLD_KW;
-		}
-		return FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(facilityCount));
+		return PLANT_PEAK_THRESHOLD_KW;
 	}
 
 	private void createRealtimeAlarms(EnergyMeasurement current, EnergyMeasurement previous) {

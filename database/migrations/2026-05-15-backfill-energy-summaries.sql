@@ -4,7 +4,7 @@ SET @OLD_SQL_SAFE_UPDATES = @@SQL_SAFE_UPDATES;
 SET SQL_SAFE_UPDATES = 0;
 
 SET @summary_from = TIMESTAMP('2026-04-15 00:00:00');
-SET @summary_to = TIMESTAMP('2026-05-16 00:00:00');
+SET @summary_to = TIMESTAMP('2026-05-19 00:00:00');
 SET @month_from = TIMESTAMP(DATE_FORMAT(@summary_from, '%Y-%m-01'));
 SET @month_to = TIMESTAMP(DATE_FORMAT(@summary_to, '%Y-%m-01')) + INTERVAL 1 MONTH;
 
