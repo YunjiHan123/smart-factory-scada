@@ -39,6 +39,14 @@ public class AlarmService {
 			.orElseThrow(() -> new BusinessException(CommonErrorCode.VALIDATION_ERROR));
 	}
 
+	@Transactional
+	public void deleteResolved(Long alarmId) {
+		int deletedCount = alarmMapper.deleteResolved(alarmId);
+		if (deletedCount == 0) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+	}
+
 	private int normalizeLimit(Integer limit) {
 		if (limit == null || limit <= 0) {
 			return DEFAULT_LIMIT;

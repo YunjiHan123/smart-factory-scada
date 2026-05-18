@@ -71,9 +71,10 @@ public class EnergyMeasurementController {
 	public List<EnergyFacilityLineUsageResponse> getFacilityLineUsages(
 		@RequestParam Long plantId,
 		@RequestParam FacilityType facilityType,
+		@RequestParam(required = false) EnergyType energyType,
 		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
 	) {
-		return energyService.getFacilityLineUsages(plantId, facilityType, date);
+		return energyService.getFacilityLineUsages(plantId, facilityType, energyType, date);
 	}
 
 	@GetMapping("/peak-dashboard")

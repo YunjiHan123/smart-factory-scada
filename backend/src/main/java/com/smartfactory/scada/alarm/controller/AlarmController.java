@@ -2,6 +2,8 @@ package com.smartfactory.scada.alarm.controller;
 
 import java.util.List;
 
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,5 +40,11 @@ public class AlarmController {
 	@PatchMapping("/{alarmId}/resolve")
 	public AlarmResponse resolve(@PathVariable Long alarmId) {
 		return alarmService.resolve(alarmId);
+	}
+
+	@DeleteMapping("/{alarmId}")
+	public ResponseEntity<Void> deleteResolved(@PathVariable Long alarmId) {
+		alarmService.deleteResolved(alarmId);
+		return ResponseEntity.noContent().build();
 	}
 }

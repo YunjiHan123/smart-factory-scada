@@ -305,6 +305,7 @@ public class ChatbotService {
 			List<EnergyFacilityLineUsageResponse> usages = energyMapper.findFacilityLineUsages(
 				plantId,
 				facilityType,
+				"ELECTRICITY",
 				usageDate,
 				usageDate.minusDays(1),
 				usageDate.withDayOfMonth(1),

@@ -1,6 +1,8 @@
 package com.smartfactory.scada.energy.service;
 
 import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -122,6 +124,39 @@ public class EnergyMeasurementMqttService {
 			generatedKey,
 			key -> latestGeneratedMeasurement(source.getPlantId(), generatedFacilityId)
 		);
+		Double sourceElectricity = source.getElectricityKwh();
+		Double sourceGas = source.getGasM3();
+		Double sourceWater = source.getWaterTon();
+		Double sourceSolar = source.getSolarKwh();
+		boolean gasEstimated = sourceGas == null || sourceGas <= 0;
+		boolean waterEstimated = sourceWater == null || sourceWater <= 0;
+		boolean solarEstimated = sourceSolar == null || sourceSolar <= 0;
+		if (sourceGas == null || sourceGas <= 0) {
+			sourceGas = estimatedGasValue(sourceElectricity, source.getPlantId(), generatedFacilityId);
+		}
+		if (sourceWater == null || sourceWater <= 0) {
+			sourceWater = estimatedWaterValue(sourceElectricity, source.getPlantId(), generatedFacilityId);
+		}
+		if (sourceSolar == null || sourceSolar <= 0) {
+			sourceSolar = estimatedSolarValue(sourceElectricity, source.getMeasuredAt(), source.getPlantId(), generatedFacilityId);
+		}
+		Double previousSourceWater = previousLegacy == null ? null : previousLegacy.waterTon();
+		Double previousSourceGas = previousLegacy == null ? null : previousLegacy.gasM3();
+		if (gasEstimated && previousLegacy != null) {
+			previousSourceGas = estimatedGasValue(previousLegacy.electricityKwh(), source.getPlantId(), generatedFacilityId);
+		}
+		if (waterEstimated && previousLegacy != null) {
+			previousSourceWater = estimatedWaterValue(previousLegacy.electricityKwh(), source.getPlantId(), generatedFacilityId);
+		}
+		Double previousSourceSolar = previousLegacy == null ? null : previousLegacy.solarKwh();
+		if (solarEstimated && previousLegacy != null) {
+			previousSourceSolar = estimatedSolarValue(
+				previousLegacy.electricityKwh(),
+				previousLegacy.measuredAt(),
+				source.getPlantId(),
+				generatedFacilityId
+			);
+		}
 
 		EnergyMeasurementMessage generated = new EnergyMeasurementMessage(
 			source.getPlantId(),
@@ -129,26 +164,26 @@ public class EnergyMeasurementMqttService {
 			source.getMeasuredAt(),
 			nextAccumulatedValue(
 				valueOf(previousGenerated == null ? null : previousGenerated.getElectricityKwh()),
-				source.getElectricityKwh(),
+				sourceElectricity,
 				previousLegacy == null ? null : previousLegacy.electricityKwh(),
 				weight
 			),
 			nextAccumulatedValue(
 				valueOf(previousGenerated == null ? null : previousGenerated.getGasM3()),
-				source.getGasM3(),
-				previousLegacy == null ? null : previousLegacy.gasM3(),
+				sourceGas,
+				previousSourceGas,
 				weight
 			),
 			nextAccumulatedValue(
 				valueOf(previousGenerated == null ? null : previousGenerated.getWaterTon()),
-				source.getWaterTon(),
-				previousLegacy == null ? null : previousLegacy.waterTon(),
+				sourceWater,
+				previousSourceWater,
 				weight
 			),
 			nextAccumulatedValue(
 				valueOf(previousGenerated == null ? null : previousGenerated.getSolarKwh()),
-				source.getSolarKwh(),
-				previousLegacy == null ? null : previousLegacy.solarKwh(),
+				sourceSolar,
+				previousSourceSolar,
 				weight
 			),
 			scaledValue(source.getPeakKw(), weight)
@@ -195,6 +230,38 @@ public class EnergyMeasurementMqttService {
 		return value == null ? null : value * weight;
 	}
 
+	private Double estimatedGasValue(Double electricityKwh, Long plantId, Long facilityId) {
+		if (electricityKwh == null) {
+			return null;
+		}
+		double plantFactor = 0.94 + (Math.floorMod(plantId == null ? 0 : plantId, 6) * 0.045);
+		double facilityFactor = 0.88 + (Math.floorMod(facilityId == null ? 0 : facilityId, 13) * 0.028);
+		return electricityKwh * 2.55 * plantFactor * facilityFactor;
+	}
+
+	private Double estimatedWaterValue(Double electricityKwh, Long plantId, Long facilityId) {
+		if (electricityKwh == null) {
+			return null;
+		}
+		double plantFactor = 0.9 + (Math.floorMod(plantId == null ? 0 : plantId, 5) * 0.035);
+		double facilityFactor = 0.82 + (Math.floorMod(facilityId == null ? 0 : facilityId, 11) * 0.018);
+		return electricityKwh * 0.11 * plantFactor * facilityFactor;
+	}
+
+	private Double estimatedSolarValue(Double electricityKwh, java.time.Instant measuredAt, Long plantId, Long facilityId) {
+		if (electricityKwh == null || measuredAt == null) {
+			return null;
+		}
+		int hour = LocalTime.ofInstant(measuredAt, ZoneId.systemDefault()).getHour();
+		if (hour < 7 || hour > 18) {
+			return 0.0;
+		}
+		double daylightFactor = Math.sin(((hour - 6) / 13.0) * Math.PI);
+		double plantFactor = 0.85 + (Math.floorMod(plantId == null ? 0 : plantId, 6) * 0.04);
+		double facilityFactor = 0.7 + (Math.floorMod(facilityId == null ? 0 : facilityId, 7) * 0.03);
+		return electricityKwh * 3.2 * daylightFactor * plantFactor * facilityFactor;
+	}
+
 	private double distributionWeight(Long plantId, long legacySequence, int equipmentIndex) {
 		double plantFactor = 0.84 + ((Math.floorMod(plantId, 7)) * 0.035);
 		double lineFactor = switch ((int) legacySequence) {
@@ -221,6 +288,7 @@ public class EnergyMeasurementMqttService {
 	}
 
 	private record LegacyMeasurementSnapshot(
+		java.time.Instant measuredAt,
 		Double electricityKwh,
 		Double gasM3,
 		Double waterTon,
@@ -229,6 +297,7 @@ public class EnergyMeasurementMqttService {
 
 		private static LegacyMeasurementSnapshot from(EnergyMeasurementMessage message) {
 			return new LegacyMeasurementSnapshot(
+				message.getMeasuredAt(),
 				message.getElectricityKwh(),
 				message.getGasM3(),
 				message.getWaterTon(),
