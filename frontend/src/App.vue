@@ -37,6 +37,8 @@ const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedPeakPeriod = ref('DAY')
 const activePeakView = ref('comparison')
 const selectedUtilityDate = ref(formatDateInput(new Date()))
+const selectedUtilityPeriod = ref('DAY')
+const activeUtilityView = ref('comparison')
 const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
 const chatbotQuestion = ref('')
@@ -129,6 +131,12 @@ const peakViewOptions = [
   { value: 'comparison', label: '공장별 비교' },
   { value: 'detail', label: '공장 상세 추이' },
   { value: 'anomaly', label: '이상 날짜' },
+]
+const utilityPeriodOptions = peakPeriodOptions
+const utilityViewOptions = [
+  { value: 'comparison', label: '공장별 비교' },
+  { value: 'detail', label: '공장 상세 추이' },
+  { value: 'meters', label: '계측기 상태' },
 ]
 const equipmentProcessNames = {
   1: '메인 프레스기',
@@ -833,7 +841,7 @@ const peakHistoryRows = computed(() =>
 )
 const utilityMetrics = computed(() => {
   const metrics = state.utilityDashboard?.metrics || {}
-  if (!selectedUtilityDateIsToday.value) {
+  if (!selectedUtilityDateIsToday.value || selectedUtilityPeriod.value !== 'DAY') {
     return metrics
   }
 
@@ -848,8 +856,36 @@ const utilityMetrics = computed(() => {
     waterTotalTon: Math.max(Number(metrics.waterTotalTon || metrics.water_total_ton || 0), waterUsageTon),
   }
 })
-const utilityHourlyUsage = computed(() =>
-  Array.from({ length: 24 }, (_, hour) => {
+const utilityPeriodLabel = computed(
+  () => utilityPeriodOptions.find((option) => option.value === selectedUtilityPeriod.value)?.label || '일',
+)
+const utilityPeriodRangeLabel = computed(() => {
+  const from = state.utilityDashboard?.periodFrom || state.utilityDashboard?.period_from || selectedUtilityDate.value
+  const to = state.utilityDashboard?.periodTo || state.utilityDashboard?.period_to || selectedUtilityDate.value
+  return from === to ? formatDate(from) : `${formatDate(from)} - ${formatDate(to)}`
+})
+const utilityPatternRangeLabel = computed(() =>
+  selectedUtilityPeriod.value === 'DAY' ? '최근 7일' : utilityPeriodRangeLabel.value,
+)
+const utilityPreviousPeriodLabel = computed(() =>
+  selectedUtilityPeriod.value === 'DAY' ? '전일 대비' : '직전 기간 대비',
+)
+const utilityLivePillLabel = computed(() =>
+  selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value && liveEnergyFresh.value
+    ? '실시간 수신 중'
+    : `${utilityPeriodLabel.value} 단위 데이터`,
+)
+const utilityDashboardPeriodUsage = computed(() => state.utilityDashboard?.periodUsage || state.utilityDashboard?.period_usage || [])
+const utilityHourlyUsage = computed(() => {
+  if (selectedUtilityPeriod.value !== 'DAY') {
+    return utilityDashboardPeriodUsage.value.map((point) => ({
+      measuredAt: point.measuredAt || point.measured_at,
+      gasUsageM3: Number(point.gasUsageM3 || point.gas_usage_m3 || 0),
+      waterUsageTon: Number(point.waterUsageTon || point.water_usage_ton || 0),
+    }))
+  }
+
+  return Array.from({ length: 24 }, (_, hour) => {
     const measuredAt = `${selectedUtilityDate.value}T${String(hour).padStart(2, '0')}:00:00`
     const source = (state.utilityDashboard?.hourlyUsage || []).find((point) => {
       const value = point.measuredAt || point.measured_at
@@ -860,8 +896,8 @@ const utilityHourlyUsage = computed(() =>
       gasUsageM3: Number(source?.gasUsageM3 || source?.gas_usage_m3 || 0),
       waterUsageTon: Number(source?.waterUsageTon || source?.water_usage_ton || 0),
     }
-  }),
-)
+  })
+})
 const utilityMeterStatuses = computed(() =>
   (state.utilityDashboard?.meterStatuses || [])
     .filter((meter) => {
@@ -890,6 +926,37 @@ const utilityMeterStatuses = computed(() =>
     }),
 )
 const selectedUtilityDateIsToday = computed(() => selectedUtilityDate.value === formatDateInput(new Date()))
+const utilityPlantComparison = computed(() => state.utilityDashboard?.plantComparison || state.utilityDashboard?.plant_comparison || [])
+const utilityGasComparisonMax = computed(() =>
+  Math.max(1, ...utilityPlantComparison.value.map((plant) => Number(plant.gasUsageM3 || plant.gas_usage_m3 || 0))),
+)
+const utilityWaterComparisonMax = computed(() =>
+  Math.max(1, ...utilityPlantComparison.value.map((plant) => Number(plant.waterUsageTon || plant.water_usage_ton || 0))),
+)
+const selectedUtilityPlantComparison = computed(() =>
+  utilityPlantComparison.value.find((plant) => Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)) || null,
+)
+const utilityComparisonRows = computed(() =>
+  utilityPlantComparison.value
+    .map((plant) => {
+      const gasUsage = Number(plant.gasUsageM3 || plant.gas_usage_m3 || 0)
+      const waterUsage = Number(plant.waterUsageTon || plant.water_usage_ton || 0)
+      return {
+        plantId: plant.plantId || plant.plant_id,
+        plantName: plant.plantName || plant.plant_name || `공장 ${plant.plantId || plant.plant_id}`,
+        gasUsageM3: gasUsage,
+        waterUsageTon: waterUsage,
+        gasShareRate: Number(plant.gasShareRate || plant.gas_share_rate || 0),
+        waterShareRate: Number(plant.waterShareRate || plant.water_share_rate || 0),
+        gasRank: Number(plant.gasRank || plant.gas_rank || 0),
+        waterRank: Number(plant.waterRank || plant.water_rank || 0),
+        gasBarWidth: `${Math.max(6, Math.round((gasUsage / utilityGasComparisonMax.value) * 100))}%`,
+        waterBarWidth: `${Math.max(6, Math.round((waterUsage / utilityWaterComparisonMax.value) * 100))}%`,
+        active: Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value),
+      }
+    })
+    .sort((a, b) => a.gasRank - b.gasRank),
+)
 const filteredUtilityMeterStatuses = computed(() => {
   const keyword = utilityMeterSearch.value.trim().toLowerCase()
   if (!keyword) {
@@ -917,10 +984,17 @@ const utilityPatterns = computed(() => {
       },
     ]),
   )
-  const endDate = new Date(`${selectedUtilityDate.value || formatDateInput(new Date())}T00:00:00`)
-  return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(endDate)
-    date.setDate(endDate.getDate() - 6 + index)
+  const periodFrom = state.utilityDashboard?.periodFrom || state.utilityDashboard?.period_from || selectedUtilityDate.value
+  const periodTo = state.utilityDashboard?.periodTo || state.utilityDashboard?.period_to || selectedUtilityDate.value
+  const startDate = new Date(`${periodFrom || selectedUtilityDate.value || formatDateInput(new Date())}T00:00:00`)
+  const endDate = new Date(`${periodTo || selectedUtilityDate.value || formatDateInput(new Date())}T00:00:00`)
+  if (selectedUtilityPeriod.value === 'DAY') {
+    startDate.setDate(endDate.getDate() - 6)
+  }
+  const dayCount = Math.max(1, Math.round((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1)
+  return Array.from({ length: Math.min(dayCount, 31) }, (_, index) => {
+    const date = new Date(startDate)
+    date.setDate(startDate.getDate() + index)
     const dateKey = formatDateInput(date)
     return (
       patternsByDate.get(dateKey) || {
@@ -935,6 +1009,9 @@ const utilityPatterns = computed(() => {
 })
 const utilityGasMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.gasUsageM3)))
 const utilityWaterMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.waterUsageTon)))
+const utilityTrendTitle = computed(() =>
+  selectedUtilityPeriod.value === 'DAY' ? '시간대별 사용량' : `${utilityPeriodLabel.value} 단위 사용량 추이`,
+)
 const utilityGasPoints = computed(() => utilityLinePoints(utilityHourlyUsage.value, 'gasUsageM3', utilityGasMax.value))
 const utilityWaterPoints = computed(() =>
   utilityLinePoints(utilityHourlyUsage.value, 'waterUsageTon', utilityWaterMax.value),
@@ -1121,6 +1198,15 @@ function formatTime(value) {
 function peakPointLabel(value) {
   if (selectedPeakPeriod.value === 'DAY') {
     return formatTime(value)
+  }
+  const date = formatDate(value)
+  return date === '-' ? '-' : date.slice(5)
+}
+
+function utilityPointLabel(value) {
+  if (selectedUtilityPeriod.value === 'DAY') {
+    const time = formatTime(value)
+    return time === '-' ? '-' : `${time.slice(0, 2)}시`
   }
   const date = formatDate(value)
   return date === '-' ? '-' : date.slice(5)
@@ -1575,6 +1661,7 @@ async function loadUtilityDashboard() {
   state.utilityDashboard = await api.utilityDashboard({
     plantId: selectedPlantId.value,
     date: selectedUtilityDate.value || undefined,
+    period: selectedUtilityPeriod.value,
   })
 }
 
@@ -1882,6 +1969,12 @@ watch(selectedPeakPeriod, () => {
 })
 
 watch(selectedUtilityDate, () => {
+  if (appMode.value !== 'login' && activePage.value === 'utility' && !syncingSelection.value) {
+    run(loadUtilityDashboard)
+  }
+})
+
+watch(selectedUtilityPeriod, () => {
   if (appMode.value !== 'login' && activePage.value === 'utility' && !syncingSelection.value) {
     run(loadUtilityDashboard)
   }
@@ -2442,20 +2535,34 @@ onUnmounted(() => {
             조회일
             <input v-model="selectedUtilityDate" type="date" />
           </label>
+          <div class="utility-period-control">
+            <span>집계 단위</span>
+            <div class="segmented">
+              <button
+                v-for="option in utilityPeriodOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: selectedUtilityPeriod === option.value }"
+                @click="selectedUtilityPeriod = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
           <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ utilityLivePillLabel }}</span>
         </section>
 
         <section class="utility-kpi-grid">
           <article class="utility-kpi-card gas">
             <span class="utility-card-icon"><Flame :size="23" /></span>
             <div>
-              <p>가스 금일 사용량</p>
+              <p>가스 {{ utilityPeriodLabel }} 사용량</p>
               <b>{{ formatNumber(utilityMetrics.gasUsageM3) }}<small> m3</small></b>
               <em :class="trendClass(utilityMetrics.gasChangeRate)">
-                전일 대비 {{ trendPrefix(utilityMetrics.gasChangeRate) }}{{ formatNumber(utilityMetrics.gasChangeRate) }}%
+                {{ utilityPreviousPeriodLabel }} {{ trendPrefix(utilityMetrics.gasChangeRate) }}{{ formatNumber(utilityMetrics.gasChangeRate) }}%
               </em>
             </div>
           </article>
@@ -2470,10 +2577,10 @@ onUnmounted(() => {
           <article class="utility-kpi-card water">
             <span class="utility-card-icon"><Droplets :size="23" /></span>
             <div>
-              <p>용수 금일 사용량</p>
+              <p>용수 {{ utilityPeriodLabel }} 사용량</p>
               <b>{{ formatNumber(utilityMetrics.waterUsageTon) }}<small> ton</small></b>
               <em :class="trendClass(utilityMetrics.waterChangeRate)">
-                전일 대비 {{ trendPrefix(utilityMetrics.waterChangeRate) }}{{ formatNumber(utilityMetrics.waterChangeRate) }}%
+                {{ utilityPreviousPeriodLabel }} {{ trendPrefix(utilityMetrics.waterChangeRate) }}{{ formatNumber(utilityMetrics.waterChangeRate) }}%
               </em>
             </div>
           </article>
@@ -2487,14 +2594,74 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="utility-chart-grid">
+        <section class="utility-view-tabs" aria-label="가스 용수 보기">
+          <button
+            v-for="option in utilityViewOptions"
+            :key="option.value"
+            type="button"
+            :class="{ active: activeUtilityView === option.value }"
+            @click="activeUtilityView = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </section>
+
+        <section v-if="activeUtilityView === 'comparison'" class="utility-comparison-grid">
+          <article class="panel utility-comparison-panel">
+            <div class="panel-title inline">
+              <h2>공장별 가스/용수 사용량 비교</h2>
+              <span>{{ utilityPeriodRangeLabel }}</span>
+            </div>
+            <div class="utility-plant-bars">
+              <button
+                v-for="plant in utilityComparisonRows"
+                :key="plant.plantId"
+                type="button"
+                :class="{ active: plant.active }"
+                @click="selectedPlantId = plant.plantId"
+              >
+                <span>{{ plant.plantName }}</span>
+                <div>
+                  <i class="gas"><em :style="{ width: plant.gasBarWidth }"></em></i>
+                  <strong>{{ formatNumber(plant.gasUsageM3, 0) }} m3</strong>
+                </div>
+                <div>
+                  <i class="water"><em :style="{ width: plant.waterBarWidth }"></em></i>
+                  <strong>{{ formatNumber(plant.waterUsageTon, 0) }} ton</strong>
+                </div>
+              </button>
+            </div>
+          </article>
+
+          <article class="panel utility-selected-plant-panel">
+            <div class="panel-title inline">
+              <h2>선택 공장 요약</h2>
+              <Factory :size="20" />
+            </div>
+            <div class="utility-selected-summary">
+              <strong>{{ selectedUtilityPlantComparison?.plantName || selectedPlant?.name || '-' }}</strong>
+              <article>
+                <span class="gas"><Flame :size="18" /> 가스</span>
+                <b>{{ formatNumber(selectedUtilityPlantComparison?.gasUsageM3, 0) }}<small> m3</small></b>
+                <em>전체 비중 {{ formatNumber(selectedUtilityPlantComparison?.gasShareRate) }}%</em>
+              </article>
+              <article>
+                <span class="water"><Droplets :size="18" /> 용수</span>
+                <b>{{ formatNumber(selectedUtilityPlantComparison?.waterUsageTon, 0) }}<small> ton</small></b>
+                <em>전체 비중 {{ formatNumber(selectedUtilityPlantComparison?.waterShareRate) }}%</em>
+              </article>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activeUtilityView === 'detail'" class="utility-chart-grid">
           <article class="panel utility-chart-panel gas">
             <div class="panel-title inline">
-              <h2>가스 시간대별 사용량</h2>
-              <span>단위: m3</span>
+              <h2>가스 {{ utilityTrendTitle }}</h2>
+              <span>단위: m3 · {{ utilityPeriodRangeLabel }}</span>
             </div>
             <div class="utility-line-chart gas">
-              <svg viewBox="0 0 720 260" role="img" aria-label="가스 시간대별 사용량">
+              <svg viewBox="0 0 720 260" role="img" :aria-label="`가스 ${utilityTrendTitle}`">
                 <defs>
                   <linearGradient id="gasLineFill" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="0%" stop-color="#f97316" stop-opacity="0.28" />
@@ -2517,8 +2684,8 @@ onUnmounted(() => {
                 </g>
                 <g class="utility-x-axis">
                   <template v-for="(point, index) in utilityGasPoints" :key="`gas-axis-${point.measuredAt}`">
-                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
-                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    <text v-if="index % 2 === 0 || index === utilityGasPoints.length - 1" :x="point.x" y="246">
+                      {{ utilityPointLabel(point.measuredAt) }}
                     </text>
                   </template>
                 </g>
@@ -2536,11 +2703,11 @@ onUnmounted(() => {
 
           <article class="panel utility-chart-panel water">
             <div class="panel-title inline">
-              <h2>용수 시간대별 사용량</h2>
-              <span>단위: ton</span>
+              <h2>용수 {{ utilityTrendTitle }}</h2>
+              <span>단위: ton · {{ utilityPeriodRangeLabel }}</span>
             </div>
             <div class="utility-line-chart water">
-              <svg viewBox="0 0 720 260" role="img" aria-label="용수 시간대별 사용량">
+              <svg viewBox="0 0 720 260" role="img" :aria-label="`용수 ${utilityTrendTitle}`">
                 <defs>
                   <linearGradient id="waterLineFill" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.28" />
@@ -2563,8 +2730,8 @@ onUnmounted(() => {
                 </g>
                 <g class="utility-x-axis">
                   <template v-for="(point, index) in utilityWaterPoints" :key="`water-axis-${point.measuredAt}`">
-                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
-                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    <text v-if="index % 2 === 0 || index === utilityWaterPoints.length - 1" :x="point.x" y="246">
+                      {{ utilityPointLabel(point.measuredAt) }}
                     </text>
                   </template>
                 </g>
@@ -2581,7 +2748,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="utility-bottom-grid">
+        <section v-else-if="activeUtilityView === 'meters'" class="utility-bottom-grid">
           <article class="panel table-panel utility-meter-panel">
             <div class="panel-title inline">
               <h2>계측기 상태 조회</h2>
@@ -2629,7 +2796,7 @@ onUnmounted(() => {
           <article class="panel utility-pattern-panel">
             <div class="panel-title inline">
               <h2>사용 패턴 분석</h2>
-              <span>최근 7일</span>
+              <span>{{ utilityPatternRangeLabel }}</span>
             </div>
             <div class="utility-pattern-grid">
               <span class="utility-pattern-label gas"><Flame :size="18" />가스</span>

@@ -29,6 +29,7 @@ import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
+import com.smartfactory.scada.energy.domain.UtilityUsagePeriod;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsageLogResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsagePointResponse;
@@ -45,6 +46,7 @@ import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
 import com.smartfactory.scada.energy.dto.UtilityUsageMetricResponse;
+import com.smartfactory.scada.energy.dto.UtilityUsagePlantComparison;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.Facility;
 import com.smartfactory.scada.facility.domain.FacilityType;
@@ -196,44 +198,63 @@ public class EnergyService {
 	}
 
 	@Transactional(readOnly = true)
-	public UtilityUsageDashboardResponse getUtilityDashboard(Long plantId, LocalDate targetDate) {
+	public UtilityUsageDashboardResponse getUtilityDashboard(Long plantId, LocalDate targetDate, UtilityUsagePeriod period) {
 		if (plantId == null) {
 			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
 		}
 
 		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
-		LocalDateTime from = resolvedDate.atStartOfDay();
-		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
-		LocalDateTime yesterdayFrom = resolvedDate.minusDays(1).atStartOfDay();
-		LocalDateTime patternFrom = resolvedDate.minusDays(6).atStartOfDay();
+		UtilityUsagePeriodRange periodRange = resolveUtilityUsagePeriodRange(resolvedDate, period);
+		UtilityUsagePeriodRange previousPeriodRange = previousUtilityUsagePeriodRange(periodRange);
+		LocalDateTime from = periodRange.from().atStartOfDay();
+		LocalDateTime to = periodRange.to().atStartOfDay();
+		LocalDateTime patternFrom = periodRange.period() == UtilityUsagePeriod.DAY
+			? resolvedDate.minusDays(6).atStartOfDay()
+			: from;
 		LocalDateTime monthFrom = resolvedDate.withDayOfMonth(1).atStartOfDay();
 
-		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, from, to);
-		List<UtilityHourlyUsage> yesterdayHourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, yesterdayFrom, from);
+		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findUtilityHourlyUsage(
+			plantId,
+			resolvedDate.atStartOfDay(),
+			resolvedDate.plusDays(1).atStartOfDay()
+		);
+		List<UtilityHourlyUsage> periodUsage = findUtilityUsageSeries(plantId, from, to, periodRange.period());
+		List<UtilityHourlyUsage> previousPeriodUsage = findUtilityUsageSeries(
+			plantId,
+			previousPeriodRange.from().atStartOfDay(),
+			previousPeriodRange.to().atStartOfDay(),
+			periodRange.period()
+		);
 		UtilityHourlyUsage monthlyUsage = energyMapper.findUtilityUsageTotal(plantId, monthFrom, to).orElse(null);
-		BigDecimal gasUsage = sumGasUsage(hourlyUsage);
-		BigDecimal waterUsage = sumWaterUsage(hourlyUsage);
-		BigDecimal yesterdayGasUsage = sumGasUsage(yesterdayHourlyUsage);
-		BigDecimal yesterdayWaterUsage = sumWaterUsage(yesterdayHourlyUsage);
+		List<UtilityUsagePlantComparison> plantComparison = energyMapper.findUtilityPlantComparison(from, to);
+		BigDecimal gasUsage = sumGasUsage(periodUsage);
+		BigDecimal waterUsage = sumWaterUsage(periodUsage);
+		BigDecimal previousGasUsage = sumGasUsage(previousPeriodUsage);
+		BigDecimal previousWaterUsage = sumWaterUsage(previousPeriodUsage);
 		BigDecimal gasTotal = monthlyUsage == null ? BigDecimal.ZERO : zeroIfNull(monthlyUsage.getGasUsageM3());
 		BigDecimal waterTotal = monthlyUsage == null ? BigDecimal.ZERO : zeroIfNull(monthlyUsage.getWaterUsageTon());
 
 		UtilityUsageMetricResponse metrics = new UtilityUsageMetricResponse(
 			gasUsage,
 			gasTotal,
-			changeRate(gasUsage, yesterdayGasUsage),
+			changeRate(gasUsage, previousGasUsage),
 			waterUsage,
 			waterTotal,
-			changeRate(waterUsage, yesterdayWaterUsage)
+			changeRate(waterUsage, previousWaterUsage)
 		);
 
 		return new UtilityUsageDashboardResponse(
 			plantId,
 			resolvedDate,
+			periodRange.period(),
+			periodRange.from(),
+			periodRange.to().minusDays(1),
 			metrics,
 			hourlyUsage,
+			periodUsage,
 			energyMapper.findUtilityMeterStatuses(plantId, from, to),
-			energyMapper.findUtilityDailyUsagePatterns(plantId, patternFrom, to)
+			energyMapper.findUtilityDailyUsagePatterns(plantId, patternFrom, to),
+			plantComparison
 		);
 	}
 
@@ -464,6 +485,41 @@ public class EnergyService {
 		return energyMapper.findPeakPowerDailyTrend(plantId, from, to);
 	}
 
+	private UtilityUsagePeriodRange resolveUtilityUsagePeriodRange(LocalDate targetDate, UtilityUsagePeriod period) {
+		UtilityUsagePeriod resolvedPeriod = period == null ? UtilityUsagePeriod.DAY : period;
+		return switch (resolvedPeriod) {
+			case DAY -> new UtilityUsagePeriodRange(resolvedPeriod, targetDate, targetDate.plusDays(1));
+			case WEEK -> {
+				LocalDate weekStart = targetDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+				yield new UtilityUsagePeriodRange(resolvedPeriod, weekStart, weekStart.plusWeeks(1));
+			}
+			case MONTH -> {
+				LocalDate monthStart = targetDate.withDayOfMonth(1);
+				yield new UtilityUsagePeriodRange(resolvedPeriod, monthStart, monthStart.plusMonths(1));
+			}
+		};
+	}
+
+	private UtilityUsagePeriodRange previousUtilityUsagePeriodRange(UtilityUsagePeriodRange periodRange) {
+		return switch (periodRange.period()) {
+			case DAY -> new UtilityUsagePeriodRange(UtilityUsagePeriod.DAY, periodRange.from().minusDays(1), periodRange.from());
+			case WEEK -> new UtilityUsagePeriodRange(UtilityUsagePeriod.WEEK, periodRange.from().minusWeeks(1), periodRange.from());
+			case MONTH -> new UtilityUsagePeriodRange(UtilityUsagePeriod.MONTH, periodRange.from().minusMonths(1), periodRange.from());
+		};
+	}
+
+	private List<UtilityHourlyUsage> findUtilityUsageSeries(
+		Long plantId,
+		LocalDateTime from,
+		LocalDateTime to,
+		UtilityUsagePeriod period
+	) {
+		if (period == UtilityUsagePeriod.DAY) {
+			return energyMapper.findUtilityHourlyUsage(plantId, from, to);
+		}
+		return energyMapper.findUtilityDailyUsage(plantId, from, to);
+	}
+
 	private BigDecimal changeRate(BigDecimal currentUsage, BigDecimal previousUsage) {
 		if (previousUsage == null || previousUsage.compareTo(BigDecimal.ZERO) == 0) {
 			return BigDecimal.ZERO;
@@ -530,6 +586,9 @@ public class EnergyService {
 	}
 
 	private record PeakPowerPeriodRange(PeakPowerPeriod period, LocalDate from, LocalDate to) {
+	}
+
+	private record UtilityUsagePeriodRange(UtilityUsagePeriod period, LocalDate from, LocalDate to) {
 	}
 
 	private void createRealtimeAlarms(EnergyMeasurement current, EnergyMeasurement previous) {

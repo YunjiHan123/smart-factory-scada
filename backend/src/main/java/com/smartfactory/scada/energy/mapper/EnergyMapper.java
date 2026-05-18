@@ -19,6 +19,7 @@ import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
 import com.smartfactory.scada.energy.dto.UtilityUsagePattern;
+import com.smartfactory.scada.energy.dto.UtilityUsagePlantComparison;
 import com.smartfactory.scada.facility.domain.FacilityType;
 
 @Mapper
@@ -165,6 +166,12 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	List<UtilityHourlyUsage> findUtilityDailyUsage(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	Optional<UtilityHourlyUsage> findUtilityUsageTotal(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
@@ -185,6 +192,11 @@ public interface EnergyMapper {
 
 	List<UtilityUsagePattern> findUtilityDailyUsagePatterns(
 		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<UtilityUsagePlantComparison> findUtilityPlantComparison(
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
 	);
