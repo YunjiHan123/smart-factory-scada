@@ -12,7 +12,32 @@ DROP TEMPORARY TABLE IF EXISTS tmp_energy_measurements_backfill;
 DROP TEMPORARY TABLE IF EXISTS tmp_energy_measurements_backfill_prev;
 DROP TEMPORARY TABLE IF EXISTS tmp_monthly_plant_summaries;
 
-CREATE TEMPORARY TABLE tmp_energy_measurements_backfill AS
+CREATE TEMPORARY TABLE tmp_energy_measurements_backfill (
+    id BIGINT NOT NULL,
+    plant_id BIGINT NOT NULL,
+    facility_id BIGINT NOT NULL,
+    measured_at DATETIME NOT NULL,
+    electricity_kwh DECIMAL(18, 2) NOT NULL,
+    gas_m3 DECIMAL(18, 2) NOT NULL,
+    water_ton DECIMAL(18, 2) NOT NULL,
+    solar_kwh DECIMAL(18, 2) NOT NULL,
+    peak_kw DECIMAL(18, 2) NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_tmp_energy_backfill_lookup (plant_id, facility_id, measured_at),
+    INDEX idx_tmp_energy_backfill_summary_at (measured_at)
+) ENGINE=InnoDB;
+
+INSERT INTO tmp_energy_measurements_backfill (
+    id,
+    plant_id,
+    facility_id,
+    measured_at,
+    electricity_kwh,
+    gas_m3,
+    water_ton,
+    solar_kwh,
+    peak_kw
+)
 SELECT
     id,
     plant_id,
@@ -27,16 +52,23 @@ FROM energy_measurements
 WHERE measured_at >= @summary_from
   AND measured_at < @summary_to;
 
-ALTER TABLE tmp_energy_measurements_backfill
-    ADD INDEX idx_tmp_energy_backfill_lookup (plant_id, facility_id, measured_at),
-    ADD INDEX idx_tmp_energy_backfill_summary_at (measured_at);
+CREATE TEMPORARY TABLE tmp_energy_measurements_backfill_prev (
+    id BIGINT NOT NULL,
+    plant_id BIGINT NOT NULL,
+    facility_id BIGINT NOT NULL,
+    measured_at DATETIME NOT NULL,
+    electricity_kwh DECIMAL(18, 2) NOT NULL,
+    gas_m3 DECIMAL(18, 2) NOT NULL,
+    water_ton DECIMAL(18, 2) NOT NULL,
+    solar_kwh DECIMAL(18, 2) NOT NULL,
+    peak_kw DECIMAL(18, 2) NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_tmp_energy_backfill_prev_lookup (plant_id, facility_id, measured_at)
+) ENGINE=InnoDB;
 
-CREATE TEMPORARY TABLE tmp_energy_measurements_backfill_prev AS
+INSERT INTO tmp_energy_measurements_backfill_prev
 SELECT *
 FROM tmp_energy_measurements_backfill;
-
-ALTER TABLE tmp_energy_measurements_backfill_prev
-    ADD INDEX idx_tmp_energy_backfill_prev_lookup (plant_id, facility_id, measured_at);
 
 DELETE FROM energy_summaries
 WHERE summary_type IN ('HOURLY', 'DAILY')
@@ -169,7 +201,7 @@ WHERE summary_type = 'HOURLY'
   AND facility_id IS NOT NULL
   AND summary_at >= @summary_from
   AND summary_at < @summary_to
-GROUP BY plant_id, facility_id, DATE(summary_at);
+GROUP BY plant_id, facility_id, TIMESTAMP(DATE(summary_at));
 
 INSERT INTO energy_summaries (
     plant_id,
@@ -229,9 +261,35 @@ WHERE summary_type = 'DAILY'
   AND facility_id IS NOT NULL
   AND summary_at >= @summary_from
   AND summary_at < @summary_to
-GROUP BY plant_id, facility_id, DATE_FORMAT(summary_at, '%Y-%m-01');
+GROUP BY plant_id, facility_id, TIMESTAMP(DATE_FORMAT(summary_at, '%Y-%m-01'));
 
-CREATE TEMPORARY TABLE tmp_monthly_plant_summaries AS
+CREATE TEMPORARY TABLE tmp_monthly_plant_summaries (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    plant_id BIGINT NOT NULL,
+    facility_id BIGINT NULL,
+    summary_type VARCHAR(20) NOT NULL,
+    summary_at DATETIME NOT NULL,
+    electricity_kwh DECIMAL(18, 2) NOT NULL,
+    gas_m3 DECIMAL(18, 2) NOT NULL,
+    water_ton DECIMAL(18, 2) NOT NULL,
+    solar_kwh DECIMAL(18, 2) NOT NULL,
+    peak_kw DECIMAL(18, 2) NOT NULL,
+    carbon_emission DECIMAL(18, 2) NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB;
+
+INSERT INTO tmp_monthly_plant_summaries (
+    plant_id,
+    facility_id,
+    summary_type,
+    summary_at,
+    electricity_kwh,
+    gas_m3,
+    water_ton,
+    solar_kwh,
+    peak_kw,
+    carbon_emission
+)
 SELECT
     plant_id,
     NULL AS facility_id,

@@ -1,9 +1,17 @@
 const TOKEN_KEY = 'scada.accessToken'
 const REFRESH_TOKEN_KEY = 'scada.refreshToken'
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const API_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const REFRESH_PATH = '/api/auth/refresh'
+const PUBLIC_AUTH_PATHS = new Set(['/api/auth/login', '/api/auth/signup', REFRESH_PATH])
+
+let refreshTokenRequest = null
 
 export function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY)
+}
+
+function getRefreshToken() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY)
 }
 
 export function saveTokens(response) {
@@ -31,34 +39,118 @@ function toQuery(params = {}) {
   return query ? `?${query}` : ''
 }
 
-export async function apiFetch(path, options = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  }
-  const token = getAccessToken()
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
+function resolveUrl(path) {
+  return path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+}
 
-  const url = path.startsWith('http') ? path : `${API_BASE_URL}${path}`
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  })
+function resolvePathname(path) {
+  if (!path.startsWith('http')) {
+    return path.split('?')[0]
+  }
+  return new URL(path).pathname
+}
 
+async function parseResponseBody(response) {
   if (response.status === 204) {
     return null
   }
 
   const contentType = response.headers.get('content-type') || ''
-  const body = contentType.includes('application/json') ? await response.json() : await response.text()
+  const text = await response.text()
+  if (!text) {
+    return null
+  }
+
+  return contentType.includes('application/json') ? JSON.parse(text) : text
+}
+
+function createApiError(response, body) {
+  const message =
+    typeof body === 'string'
+      ? body
+      : body?.message || body?.error || 'API 요청에 실패했습니다.'
+  const error = new Error(message)
+  error.status = response.status
+  return error
+}
+
+async function refreshTokens() {
+  const accessToken = getAccessToken()
+  const refreshToken = getRefreshToken()
+
+  if (!accessToken || !refreshToken) {
+    throw createApiError({ status: 401 }, { message: '인증 정보가 없습니다.' })
+  }
+
+  const response = await fetch(resolveUrl(REFRESH_PATH), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'X-Refresh-Token': refreshToken,
+    },
+  })
+  const body = await parseResponseBody(response)
 
   if (!response.ok) {
-    const message = typeof body === 'string' ? body : body.message || body.error || 'API 요청에 실패했습니다.'
-    const error = new Error(message)
-    error.status = response.status
-    throw error
+    clearTokens()
+    throw createApiError(response, body)
+  }
+
+  saveTokens(body)
+  return body
+}
+
+function getSharedRefreshTokenRequest() {
+  if (!refreshTokenRequest) {
+    refreshTokenRequest = refreshTokens().finally(() => {
+      refreshTokenRequest = null
+    })
+  }
+  return refreshTokenRequest
+}
+
+function shouldRefresh(path, response, retryOnUnauthorized, tokenUsed) {
+  const pathname = resolvePathname(path)
+  return (
+    retryOnUnauthorized &&
+    response.status === 401 &&
+    tokenUsed &&
+    getRefreshToken() &&
+    !PUBLIC_AUTH_PATHS.has(pathname)
+  )
+}
+
+export async function apiFetch(path, options = {}, retryOnUnauthorized = true) {
+  const pathname = resolvePathname(path)
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  }
+  const token = getAccessToken()
+  if (token && !PUBLIC_AUTH_PATHS.has(pathname)) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(resolveUrl(path), {
+    ...options,
+    headers,
+  })
+
+  if (shouldRefresh(path, response, retryOnUnauthorized, token)) {
+    const latestToken = getAccessToken()
+    if (latestToken && latestToken !== token) {
+      return apiFetch(path, options, false)
+    }
+
+    await getSharedRefreshTokenRequest()
+    return apiFetch(path, options, false)
+  }
+
+  const body = await parseResponseBody(response)
+
+  if (!response.ok) {
+    throw createApiError(response, body)
   }
 
   return body
