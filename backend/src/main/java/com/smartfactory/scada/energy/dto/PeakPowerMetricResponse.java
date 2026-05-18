@@ -8,6 +8,8 @@ public record PeakPowerMetricResponse(
 	BigDecimal peakUsageRate,
 	BigDecimal intervalAverageKw,
 	BigDecimal intervalMaxKw,
+	BigDecimal previousDayAverageKw,
+	BigDecimal previousDayAverageRate,
 	BigDecimal thresholdKw,
 	LocalDateTime measuredAt,
 	LocalDateTime intervalAt

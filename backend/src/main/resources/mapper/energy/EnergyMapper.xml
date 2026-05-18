@@ -123,6 +123,136 @@
           AND summary_at &lt; #{to}
     </delete>
 
+    <insert id="insertHourlyFacilitySummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                TIMESTAMP(DATE(measured_at), MAKETIME(HOUR(measured_at), 0, 0)) AS measured_hour,
+                electricity_kwh,
+                gas_m3,
+                water_ton,
+                solar_kwh,
+                peak_kw,
+                LAG(electricity_kwh) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_electricity_kwh,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton,
+                LAG(solar_kwh) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_solar_kwh
+            FROM energy_measurements
+            WHERE measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+        ),
+        hourly_usage AS (
+            SELECT
+                plant_id,
+                facility_id,
+                measured_hour AS summary_at,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_electricity_kwh IS NULL THEN 0
+                        WHEN electricity_kwh &gt;= previous_electricity_kwh THEN electricity_kwh - previous_electricity_kwh
+                        ELSE 0
+                    END
+                ), 0) AS electricity_kwh,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_gas_m3 IS NULL THEN 0
+                        WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                        ELSE 0
+                    END
+                ), 0) AS gas_m3,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_water_ton IS NULL THEN 0
+                        WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                        ELSE 0
+                    END
+                ), 0) AS water_ton,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_solar_kwh IS NULL THEN 0
+                        WHEN solar_kwh &gt;= previous_solar_kwh THEN solar_kwh - previous_solar_kwh
+                        ELSE 0
+                    END
+                ), 0) AS solar_kwh,
+                COALESCE(MAX(peak_kw), 0) AS peak_kw
+            FROM ordered_measurements
+            GROUP BY plant_id, facility_id, measured_hour
+        )
+        SELECT
+            plant_id,
+            facility_id,
+            'HOURLY',
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            ROUND(electricity_kwh * 0.47, 2)
+        FROM hourly_usage
+    </insert>
+
+    <insert id="insertHourlyPlantSummaries">
+        INSERT INTO energy_summaries (
+            plant_id,
+            facility_id,
+            summary_type,
+            summary_at,
+            electricity_kwh,
+            gas_m3,
+            water_ton,
+            solar_kwh,
+            peak_kw,
+            carbon_emission
+        )
+        SELECT
+            plant_id,
+            NULL,
+            'HOURLY',
+            summary_at,
+            COALESCE(SUM(electricity_kwh), 0),
+            COALESCE(SUM(gas_m3), 0),
+            COALESCE(SUM(water_ton), 0),
+            COALESCE(SUM(solar_kwh), 0),
+            COALESCE(MAX(peak_kw), 0),
+            COALESCE(SUM(carbon_emission), 0)
+        FROM energy_summaries
+        WHERE summary_type = 'HOURLY'
+          AND facility_id IS NOT NULL
+          AND summary_at &gt;= #{from}
+          AND summary_at &lt; #{to}
+        GROUP BY plant_id, summary_at
+    </insert>
+
     <insert id="insertDailyFacilitySummaries">
         INSERT INTO energy_summaries (
             plant_id,
@@ -432,6 +562,8 @@
         WHERE es.plant_id = #{plantId}
           AND f.plant_id = #{plantId}
           AND f.facility_type = #{facilityType}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
           AND es.summary_type = 'DAILY'
           AND DATE(es.summary_at) = #{targetDate}
         LIMIT 1
@@ -444,6 +576,8 @@
         WHERE es.plant_id = #{plantId}
           AND f.plant_id = #{plantId}
           AND f.facility_type = #{facilityType}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
           AND es.summary_type = 'DAILY'
         ORDER BY es.summary_at DESC, es.id DESC
         LIMIT 1
@@ -524,6 +658,8 @@
         LEFT JOIN latest_measurement lm ON lm.facility_id = f.id
         WHERE f.plant_id = #{plantId}
           AND f.facility_type = #{facilityType}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
         ORDER BY f.id ASC
     </select>
 
@@ -532,6 +668,16 @@
         FROM energy_measurements
         WHERE plant_id = #{plantId}
           AND facility_id = #{facilityId}
+        ORDER BY measured_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findPreviousMeasurement" resultMap="EnergyMeasurementResultMap">
+        SELECT id, plant_id, facility_id, measured_at, electricity_kwh, gas_m3, water_ton, solar_kwh, peak_kw, created_at
+        FROM energy_measurements
+        WHERE plant_id = #{plantId}
+          AND facility_id = #{facilityId}
+          AND measured_at &lt; #{measuredAt}
         ORDER BY measured_at DESC, id DESC
         LIMIT 1
     </select>
@@ -652,7 +798,7 @@
             #{thresholdKw} AS threshold_kw,
             peak_kw &gt; #{thresholdKw} AS exceeded
         FROM trend
-        WHERE peak_kw &gt;= #{thresholdKw} * 0.8
+        WHERE peak_kw &gt; #{thresholdKw}
         ORDER BY peak_kw DESC, measured_at DESC
         LIMIT #{limit}
     </select>
@@ -667,6 +813,8 @@
                 WHERE plant_id = #{plantId}
                   AND measured_at &gt;= #{from}
                   AND measured_at &lt; #{to}
+                  AND facility_id &gt;= 10000
+                  AND MOD(facility_id, 10000) BETWEEN 1 AND 24
                 GROUP BY facility_id
             ) latest
               ON latest.facility_id = em.facility_id
@@ -710,6 +858,8 @@
             WHERE plant_id = #{plantId}
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
         )
         SELECT
             measured_hour AS measured_at,
@@ -732,6 +882,49 @@
         ORDER BY measured_hour ASC
     </select>
 
+    <select id="findUtilityUsageTotal" resultMap="UtilityHourlyUsageResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                gas_m3,
+                water_ton,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+        )
+        SELECT
+            #{from} AS measured_at,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_gas_m3 IS NULL THEN 0
+                    WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                    ELSE 0
+                END
+            ), 0), 2) AS gas_usage_m3,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_water_ton IS NULL THEN 0
+                    WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                    ELSE 0
+                END
+            ), 0), 2) AS water_usage_ton
+        FROM ordered_measurements
+    </select>
+
     <select id="findLatestPlantUtilityMeasurement" resultMap="EnergyMeasurementResultMap">
         WITH latest_per_facility AS (
             SELECT em.*
@@ -742,6 +935,8 @@
                 WHERE plant_id = #{plantId}
                   AND measured_at &gt;= #{from}
                   AND measured_at &lt; #{to}
+                  AND facility_id &gt;= 10000
+                  AND MOD(facility_id, 10000) BETWEEN 1 AND 24
                 GROUP BY facility_id
             ) latest
               ON latest.facility_id = em.facility_id
@@ -797,6 +992,8 @@
         FROM facilities f
         LEFT JOIN latest l ON l.facility_id = f.id
         WHERE f.plant_id = #{plantId}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
         UNION ALL
         SELECT
             f.id AS facility_id,
@@ -814,6 +1011,8 @@
         FROM facilities f
         LEFT JOIN latest l ON l.facility_id = f.id
         WHERE f.plant_id = #{plantId}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
         ORDER BY facility_id ASC, meter_type ASC
     </select>
 

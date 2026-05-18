@@ -6,14 +6,14 @@ SET @OLD_SQL_SAFE_UPDATES = @@SQL_SAFE_UPDATES;
 SET FOREIGN_KEY_CHECKS = 0;
 SET SQL_SAFE_UPDATES = 0;
 
-DELETE FROM chatbot_messages WHERE user_id BETWEEN 1001 AND 1006 OR plant_id BETWEEN 1 AND 6;
-DELETE FROM simulation_results WHERE user_id BETWEEN 1001 AND 1006 OR plant_id BETWEEN 1 AND 6;
+DELETE FROM chatbot_messages WHERE user_id BETWEEN 1001 AND 1007 OR plant_id BETWEEN 1 AND 6;
+DELETE FROM simulation_results WHERE user_id BETWEEN 1001 AND 1007 OR plant_id BETWEEN 1 AND 6;
 DELETE FROM alarms WHERE plant_id BETWEEN 1 AND 6;
 DELETE FROM esg_scores WHERE plant_id BETWEEN 1 AND 6;
 DELETE FROM energy_summaries WHERE plant_id BETWEEN 1 AND 6;
 DELETE FROM energy_measurements WHERE plant_id BETWEEN 1 AND 6;
 DELETE FROM facilities WHERE plant_id BETWEEN 1 AND 6;
-DELETE FROM users WHERE id BETWEEN 1001 AND 1006;
+DELETE FROM users WHERE id BETWEEN 1001 AND 1007;
 DELETE FROM plants WHERE id BETWEEN 1 AND 6;
 
 SET FOREIGN_KEY_CHECKS = 1;
@@ -30,12 +30,13 @@ INSERT INTO plants (id, name, company_type, address, latitude, longitude) VALUES
 INSERT INTO users (
     id, email, password_hash, name, phone, role, plant_id, status, note, last_login_at
 ) VALUES
-    (1001, 'admin@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '통합 관리자', '010-1000-0001', 'ADMIN', NULL, 'ACTIVE', '데모 통합 관리자 계정', NOW() - INTERVAL 10 MINUTE),
-    (1002, 'manager.hwaseong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '화성 에너지 매니저', '010-1000-0002', 'MANAGER', 1, 'ACTIVE', '기아 화성 사업장 담당자', NOW() - INTERVAL 25 MINUTE),
-    (1003, 'operator.gwangmyeong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '광명 설비 운영자', '010-1000-0003', 'OPERATOR', 2, 'ACTIVE', '기아 광명 생산라인 운영 담당자', NOW() - INTERVAL 1 HOUR),
-    (1004, 'viewer.ulsan@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '울산 조회 사용자', '010-1000-0004', 'VIEWER', 4, 'ACTIVE', '현대 울산공장 조회 전용 사용자', NOW() - INTERVAL 2 HOUR),
-    (1005, 'locked@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '잠금 테스트 사용자', '010-1000-0005', 'VIEWER', 1, 'LOCKED', '잠금 계정 테스트 사용자', NULL),
-    (1006, 'inactive@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '비활성 테스트 사용자', '010-1000-0006', 'OPERATOR', 3, 'INACTIVE', '비활성 계정 테스트 사용자', NULL);
+    (1001, 'admin@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '통합 관리자', '010-1000-0001', 'ADMIN', NULL, 'ACTIVE', '전체 사업장 열람 계정', NOW() - INTERVAL 10 MINUTE),
+    (1002, 'manager.hwaseong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '기아 화성 관리자', '010-1000-0002', 'MANAGER', 1, 'ACTIVE', '기아 화성 사업장 담당 계정', NOW() - INTERVAL 25 MINUTE),
+    (1003, 'manager.gwangmyeong@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '기아 광명 관리자', '010-1000-0003', 'MANAGER', 2, 'ACTIVE', '기아 광명 사업장 담당 계정', NOW() - INTERVAL 1 HOUR),
+    (1004, 'manager.gwangju@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '기아 광주 관리자', '010-1000-0004', 'MANAGER', 3, 'ACTIVE', '기아 광주 사업장 담당 계정', NOW() - INTERVAL 2 HOUR),
+    (1005, 'manager.ulsan@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '현대 울산 관리자', '010-1000-0005', 'MANAGER', 4, 'ACTIVE', '현대 울산 사업장 담당 계정', NOW() - INTERVAL 3 HOUR),
+    (1006, 'manager.asan@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '현대 아산 관리자', '010-1000-0006', 'MANAGER', 5, 'ACTIVE', '현대 아산 사업장 담당 계정', NOW() - INTERVAL 4 HOUR),
+    (1007, 'manager.jeonju@scada.com', '$2a$10$AjgLZMPwXSVx4hIDQ.5fcebBKPCYE/3kLsFMdqlNRxyXQKMQr086W', '현대 전주 관리자', '010-1000-0007', 'MANAGER', 6, 'ACTIVE', '현대 전주 사업장 담당 계정', NOW() - INTERVAL 5 HOUR);
 
 INSERT INTO facilities (id, plant_id, name, facility_type, status) VALUES
     (101, 1, '화성 프레스 1라인', 'PRESS', 'RUNNING'),

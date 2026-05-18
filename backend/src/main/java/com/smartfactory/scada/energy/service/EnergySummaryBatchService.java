@@ -26,9 +26,32 @@ public class EnergySummaryBatchService {
 		createDailySummaries(LocalDate.now().minusDays(1));
 	}
 
+	@Scheduled(cron = "${energy.summary.hourly-cron:0 5 * * * *}")
+	public void createPreviousHourSummaries() {
+		LocalDateTime previousHour = LocalDateTime.now().minusHours(1).withMinute(0).withSecond(0).withNano(0);
+		createHourlySummaries(previousHour);
+	}
+
 	@Scheduled(cron = "${energy.summary.monthly-cron:0 30 0 1 * *}")
 	public void createPreviousMonthSummaries() {
 		createMonthlySummaries(YearMonth.now().minusMonths(1));
+	}
+
+	@Transactional
+	public void createHourlySummaries(LocalDateTime hour) {
+		LocalDateTime from = hour.withMinute(0).withSecond(0).withNano(0);
+		LocalDateTime to = from.plusHours(1);
+
+		energyMapper.deleteSummaries(SummaryType.HOURLY, from, to);
+		int facilitySummaryCount = energyMapper.insertHourlyFacilitySummaries(from, to);
+		int plantSummaryCount = energyMapper.insertHourlyPlantSummaries(from, to);
+
+		log.info(
+			"Created hourly energy summaries. hour={}, facilitySummaryCount={}, plantSummaryCount={}",
+			from,
+			facilitySummaryCount,
+			plantSummaryCount
+		);
 	}
 
 	@Transactional
