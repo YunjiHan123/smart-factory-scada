@@ -766,6 +766,12 @@ input {
   border: 1px solid #fed7aa;
 }
 
+.badge.neutral {
+  color: #5b6b86;
+  background: #f1f5f9;
+  border: 1px solid #d9e3f1;
+}
+
 .info-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1294,6 +1300,7 @@ td {
 }
 
 .utility-line-chart {
+  position: relative;
   min-height: 290px;
   padding: 12px 8px 0;
   border-bottom: 1px solid var(--line);
@@ -1346,6 +1353,7 @@ td {
 .utility-dot {
   fill: #fff;
   stroke-width: 2.4;
+  cursor: pointer;
 }
 
 .utility-dot.gas {
@@ -1361,6 +1369,33 @@ td {
   font-size: 11px;
   font-weight: 900;
   text-anchor: middle;
+}
+
+.utility-chart-tooltip {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  min-width: 132px;
+  gap: 4px;
+  padding: 9px 11px;
+  color: #0b1633;
+  pointer-events: none;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+.utility-chart-tooltip b {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.utility-chart-tooltip span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .utility-gas-text {
