@@ -85,4 +85,10 @@ export const api = {
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
   esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),
+  chatbotMessages: (params) => apiFetch(`/api/chatbot/messages${toQuery(params)}`),
+  askChatbot: (payload) =>
+    apiFetch('/api/chatbot/messages', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }
