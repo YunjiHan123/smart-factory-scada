@@ -1554,6 +1554,16 @@ async function loadLatestEnergy() {
 }
 
 function energyWebSocketUrl() {
+  const configuredBaseUrl = import.meta.env.VITE_WS_BASE_URL || import.meta.env.VITE_API_BASE_URL || ''
+  if (configuredBaseUrl) {
+    const url = new URL(configuredBaseUrl, window.location.origin)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    url.pathname = '/ws/energy'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws/energy`
 }

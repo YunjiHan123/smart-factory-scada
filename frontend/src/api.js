@@ -1,5 +1,6 @@
 const TOKEN_KEY = 'scada.accessToken'
 const REFRESH_TOKEN_KEY = 'scada.refreshToken'
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 export function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY)
@@ -40,7 +41,8 @@ export async function apiFetch(path, options = {}) {
     headers.Authorization = `Bearer ${token}`
   }
 
-  const response = await fetch(path, {
+  const url = path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+  const response = await fetch(url, {
     ...options,
     headers,
   })
