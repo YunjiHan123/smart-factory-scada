@@ -15,6 +15,11 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.smartfactory.scada.alarm.domain.Alarm;
+import com.smartfactory.scada.alarm.domain.AlarmLevel;
+import com.smartfactory.scada.alarm.domain.AlarmStatus;
+import com.smartfactory.scada.alarm.domain.AlarmType;
+import com.smartfactory.scada.alarm.mapper.AlarmMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.common.exception.CommonErrorCode;
 import com.smartfactory.scada.energy.domain.EnergyMeasurement;
@@ -50,9 +55,16 @@ public class EnergyService {
 	private static final int DEFAULT_LIMIT = 100;
 	private static final int MAX_LIMIT = 500;
 	private static final BigDecimal FACILITY_PEAK_THRESHOLD_KW = BigDecimal.valueOf(1400);
+	private static final BigDecimal ELECTRICITY_WARNING_DELTA = BigDecimal.valueOf(80);
+	private static final BigDecimal ELECTRICITY_CRITICAL_DELTA = BigDecimal.valueOf(130);
+	private static final BigDecimal GAS_WARNING_DELTA = BigDecimal.valueOf(8);
+	private static final BigDecimal GAS_CRITICAL_DELTA = BigDecimal.valueOf(15);
+	private static final BigDecimal WATER_WARNING_DELTA = BigDecimal.valueOf(1.5);
+	private static final BigDecimal WATER_CRITICAL_DELTA = BigDecimal.valueOf(3);
 
 	private final EnergyMapper energyMapper;
 	private final FacilityMapper facilityMapper;
+	private final AlarmMapper alarmMapper;
 
 	@Transactional
 	public void saveMeasurement(EnergyMeasurementMessage message) {
@@ -66,7 +78,15 @@ public class EnergyService {
 		measurement.setSolarKwh(toBigDecimal(message.getSolarKwh()));
 		measurement.setPeakKw(toBigDecimal(message.getPeakKw()));
 
+		EnergyMeasurement previousMeasurement = energyMapper.findPreviousMeasurement(
+				measurement.getPlantId(),
+				measurement.getFacilityId(),
+				measurement.getMeasuredAt()
+			)
+			.orElse(null);
+
 		energyMapper.insertMeasurement(measurement);
+		createRealtimeAlarms(measurement, previousMeasurement);
 	}
 
 	@Transactional(readOnly = true)
@@ -116,6 +136,11 @@ public class EnergyService {
 		BigDecimal thresholdKw = peakThresholdForPlant(plantId);
 
 		List<PeakPowerTrendPoint> trend = energyMapper.findPeakPowerTrend(plantId, from, to);
+		List<PeakPowerTrendPoint> previousDayTrend = energyMapper.findPeakPowerTrend(
+			plantId,
+			resolvedDate.minusDays(1).atStartOfDay(),
+			resolvedDate.atStartOfDay()
+		);
 		List<PeakPowerFacilityRanking> ranking = energyMapper.findPeakPowerFacilityRanking(plantId, from, to, 5);
 		List<PeakPowerHistory> history = energyMapper.findPeakPowerHistory(
 			plantId,
@@ -130,12 +155,15 @@ public class EnergyService {
 		BigDecimal currentKw = latestMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestMeasurement.getPeakKw());
 		BigDecimal intervalAverageKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getAverageKw());
 		BigDecimal intervalMaxKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getMaxKw());
+		BigDecimal previousDayAverageKw = averagePeak(previousDayTrend);
 
 		PeakPowerMetricResponse metrics = new PeakPowerMetricResponse(
 			currentKw,
 			rateOf(currentKw, thresholdKw),
 			intervalAverageKw,
 			intervalMaxKw,
+			previousDayAverageKw,
+			rateOf(currentKw, previousDayAverageKw),
 			thresholdKw,
 			latestMeasurement == null ? null : latestMeasurement.getMeasuredAt(),
 			latestInterval == null ? null : latestInterval.getMeasuredAt()
@@ -162,18 +190,17 @@ public class EnergyService {
 		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
 		LocalDateTime yesterdayFrom = resolvedDate.minusDays(1).atStartOfDay();
 		LocalDateTime patternFrom = resolvedDate.minusDays(6).atStartOfDay();
+		LocalDateTime monthFrom = resolvedDate.withDayOfMonth(1).atStartOfDay();
 
 		List<UtilityHourlyUsage> hourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, from, to);
 		List<UtilityHourlyUsage> yesterdayHourlyUsage = energyMapper.findUtilityHourlyUsage(plantId, yesterdayFrom, from);
-		EnergyMeasurement latestUtilityMeasurement = energyMapper.findLatestPlantUtilityMeasurement(plantId, from, to)
-			.orElse(null);
-
+		UtilityHourlyUsage monthlyUsage = energyMapper.findUtilityUsageTotal(plantId, monthFrom, to).orElse(null);
 		BigDecimal gasUsage = sumGasUsage(hourlyUsage);
 		BigDecimal waterUsage = sumWaterUsage(hourlyUsage);
 		BigDecimal yesterdayGasUsage = sumGasUsage(yesterdayHourlyUsage);
 		BigDecimal yesterdayWaterUsage = sumWaterUsage(yesterdayHourlyUsage);
-		BigDecimal gasTotal = latestUtilityMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestUtilityMeasurement.getGasM3());
-		BigDecimal waterTotal = latestUtilityMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestUtilityMeasurement.getWaterTon());
+		BigDecimal gasTotal = monthlyUsage == null ? BigDecimal.ZERO : zeroIfNull(monthlyUsage.getGasUsageM3());
+		BigDecimal waterTotal = monthlyUsage == null ? BigDecimal.ZERO : zeroIfNull(monthlyUsage.getWaterUsageTon());
 
 		UtilityUsageMetricResponse metrics = new UtilityUsageMetricResponse(
 			gasUsage,
@@ -361,6 +388,31 @@ public class EnergyService {
 			.orElse(BigDecimal.ZERO);
 	}
 
+	private BigDecimal electricityUsageForDate(Long plantId, Long facilityId, LocalDate date) {
+		List<EnergySummary> measurementSums = energyMapper.findMeasurementDailySums(
+			plantId,
+			facilityId,
+			date.atStartOfDay(),
+			date.atTime(LocalTime.MAX)
+		);
+		if (!measurementSums.isEmpty()) {
+			return zeroIfNull(measurementSums.get(0).getElectricityKwh());
+		}
+
+		return energyMapper.findSummaries(
+				plantId,
+				facilityId,
+				SummaryType.DAILY,
+				date.atStartOfDay(),
+				date.atTime(LocalTime.MAX)
+			)
+			.stream()
+			.findFirst()
+			.map(EnergySummary::getElectricityKwh)
+			.map(this::zeroIfNull)
+			.orElse(BigDecimal.ZERO);
+	}
+
 	private BigDecimal changeRate(BigDecimal currentUsage, BigDecimal previousUsage) {
 		if (previousUsage == null || previousUsage.compareTo(BigDecimal.ZERO) == 0) {
 			return BigDecimal.ZERO;
@@ -397,12 +449,177 @@ public class EnergyService {
 			.reduce(BigDecimal.ZERO, BigDecimal::add);
 	}
 
+	private BigDecimal averagePeak(List<PeakPowerTrendPoint> trend) {
+		if (trend.isEmpty()) {
+			return BigDecimal.ZERO;
+		}
+		return trend.stream()
+			.map(PeakPowerTrendPoint::getAverageKw)
+			.map(this::zeroIfNull)
+			.reduce(BigDecimal.ZERO, BigDecimal::add)
+			.divide(BigDecimal.valueOf(trend.size()), 2, RoundingMode.HALF_UP);
+	}
+
 	private BigDecimal peakThresholdForPlant(Long plantId) {
 		int facilityCount = facilityMapper.findByPlantId(plantId).size();
 		if (facilityCount <= 0) {
 			return FACILITY_PEAK_THRESHOLD_KW;
 		}
 		return FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(facilityCount));
+	}
+
+	private void createRealtimeAlarms(EnergyMeasurement current, EnergyMeasurement previous) {
+		createPeakAlarm(current);
+
+		if (previous == null) {
+			return;
+		}
+
+		BigDecimal electricityDelta = delta(current.getElectricityKwh(), previous.getElectricityKwh());
+		createDeltaAlarm(
+			current,
+			AlarmType.ELECTRICITY,
+			electricityDelta,
+			ELECTRICITY_WARNING_DELTA,
+			ELECTRICITY_CRITICAL_DELTA,
+			"kWh",
+			"전기 사용량이 급증했습니다."
+		);
+
+		BigDecimal gasDelta = delta(current.getGasM3(), previous.getGasM3());
+		createDeltaAlarm(
+			current,
+			AlarmType.GAS,
+			gasDelta,
+			GAS_WARNING_DELTA,
+			GAS_CRITICAL_DELTA,
+			"m3",
+			"가스 사용량이 급증했습니다."
+		);
+
+		BigDecimal waterDelta = delta(current.getWaterTon(), previous.getWaterTon());
+		createDeltaAlarm(
+			current,
+			AlarmType.WATER,
+			waterDelta,
+			WATER_WARNING_DELTA,
+			WATER_CRITICAL_DELTA,
+			"ton",
+			"용수 사용량이 급증했습니다."
+		);
+
+		createMeterReverseAlarm(current, previous);
+	}
+
+	private void createPeakAlarm(EnergyMeasurement current) {
+		BigDecimal peakKw = zeroIfNull(current.getPeakKw());
+		if (peakKw.compareTo(FACILITY_PEAK_THRESHOLD_KW) < 0) {
+			return;
+		}
+
+		BigDecimal criticalThreshold = FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(1.1));
+		AlarmLevel level = peakKw.compareTo(criticalThreshold) >= 0 ? AlarmLevel.CRITICAL : AlarmLevel.WARNING;
+		createAlarmIfNotRecent(
+			current,
+			AlarmType.PEAK,
+			level,
+			peakKw,
+			FACILITY_PEAK_THRESHOLD_KW,
+			String.format("%s 피크 전력이 기준값을 초과했습니다.", facilityLabel(current.getFacilityId()))
+		);
+	}
+
+	private void createDeltaAlarm(
+		EnergyMeasurement current,
+		AlarmType alarmType,
+		BigDecimal delta,
+		BigDecimal warningThreshold,
+		BigDecimal criticalThreshold,
+		String unit,
+		String message
+	) {
+		if (delta.compareTo(warningThreshold) < 0) {
+			return;
+		}
+
+		AlarmLevel level = delta.compareTo(criticalThreshold) >= 0 ? AlarmLevel.CRITICAL : AlarmLevel.WARNING;
+		BigDecimal threshold = level == AlarmLevel.CRITICAL ? criticalThreshold : warningThreshold;
+		createAlarmIfNotRecent(
+			current,
+			alarmType,
+			level,
+			delta,
+			threshold,
+			String.format("%s %s 증가량: %s %s", facilityLabel(current.getFacilityId()), message, delta, unit)
+		);
+	}
+
+	private void createMeterReverseAlarm(EnergyMeasurement current, EnergyMeasurement previous) {
+		if (!isReversed(current.getElectricityKwh(), previous.getElectricityKwh())
+			&& !isReversed(current.getGasM3(), previous.getGasM3())
+			&& !isReversed(current.getWaterTon(), previous.getWaterTon())) {
+			return;
+		}
+
+		createAlarmIfNotRecent(
+			current,
+			AlarmType.FACILITY,
+			AlarmLevel.WARNING,
+			BigDecimal.ZERO,
+			BigDecimal.ZERO,
+			String.format("%s 누적 계측값이 직전 수집값보다 감소했습니다. 계측기 리셋 또는 이상 여부를 확인하세요.", facilityLabel(current.getFacilityId()))
+		);
+	}
+
+	private void createAlarmIfNotRecent(
+		EnergyMeasurement measurement,
+		AlarmType alarmType,
+		AlarmLevel alarmLevel,
+		BigDecimal value,
+		BigDecimal thresholdValue,
+		String message
+	) {
+		LocalDateTime since = measurement.getMeasuredAt().minusMinutes(15);
+		long recentCount = alarmMapper.countRecentOccurred(
+			measurement.getPlantId(),
+			measurement.getFacilityId(),
+			alarmType,
+			since
+		);
+		if (recentCount > 0) {
+			return;
+		}
+
+		Alarm alarm = new Alarm();
+		alarm.setPlantId(measurement.getPlantId());
+		alarm.setFacilityId(measurement.getFacilityId());
+		alarm.setAlarmType(alarmType);
+		alarm.setAlarmLevel(alarmLevel);
+		alarm.setMessage(message);
+		alarm.setValue(value);
+		alarm.setThresholdValue(thresholdValue);
+		alarm.setOccurredAt(measurement.getMeasuredAt());
+		alarm.setStatus(AlarmStatus.OCCURRED);
+		alarmMapper.insert(alarm);
+	}
+
+	private String facilityLabel(Long facilityId) {
+		return facilityMapper.findById(facilityId)
+			.map(Facility::getName)
+			.orElse("설비 " + facilityId);
+	}
+
+	private BigDecimal delta(BigDecimal current, BigDecimal previous) {
+		BigDecimal currentValue = zeroIfNull(current);
+		BigDecimal previousValue = zeroIfNull(previous);
+		if (currentValue.compareTo(previousValue) < 0) {
+			return BigDecimal.ZERO;
+		}
+		return currentValue.subtract(previousValue);
+	}
+
+	private boolean isReversed(BigDecimal current, BigDecimal previous) {
+		return current != null && previous != null && current.compareTo(previous) < 0;
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {
