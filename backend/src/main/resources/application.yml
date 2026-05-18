@@ -45,6 +45,7 @@ mqtt:
 
 energy:
   summary:
+    hourly-cron: ${ENERGY_SUMMARY_HOURLY_CRON:0 5 * * * *}
     daily-cron: ${ENERGY_SUMMARY_DAILY_CRON:0 10 0 * * *}
     monthly-cron: ${ENERGY_SUMMARY_MONTHLY_CRON:0 30 0 1 * *}
 

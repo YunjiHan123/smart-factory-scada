@@ -58,6 +58,30 @@
         WHERE a.id = #{id}
     </select>
 
+    <insert id="insert" parameterType="com.smartfactory.scada.alarm.domain.Alarm" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO alarms (
+            plant_id,
+            facility_id,
+            alarm_type,
+            alarm_level,
+            message,
+            value,
+            threshold_value,
+            occurred_at,
+            status
+        ) VALUES (
+            #{plantId},
+            #{facilityId},
+            #{alarmType},
+            #{alarmLevel},
+            #{message},
+            #{value},
+            #{thresholdValue},
+            #{occurredAt},
+            #{status}
+        )
+    </insert>
+
     <update id="resolve">
         UPDATE alarms
         SET status = 'RESOLVED',
@@ -71,5 +95,22 @@
         FROM alarms
         WHERE status = 'OCCURRED'
         <if test="plantId != null">AND plant_id = #{plantId}</if>
+    </select>
+
+    <select id="countRecentOccurred" resultType="long">
+        SELECT COUNT(*)
+        FROM alarms
+        WHERE status = 'OCCURRED'
+          AND plant_id = #{plantId}
+          AND alarm_type = #{alarmType}
+          AND occurred_at &gt;= #{since}
+          <choose>
+              <when test="facilityId != null">
+                  AND facility_id = #{facilityId}
+              </when>
+              <otherwise>
+                  AND facility_id IS NULL
+              </otherwise>
+          </choose>
     </select>
 </mapper>

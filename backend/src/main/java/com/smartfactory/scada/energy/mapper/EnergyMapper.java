@@ -36,6 +36,16 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	int insertHourlyFacilitySummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	int insertHourlyPlantSummaries(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	int insertDailyPlantSummaries(
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
@@ -101,6 +111,12 @@ public interface EnergyMapper {
 		@Param("facilityId") Long facilityId
 	);
 
+	Optional<EnergyMeasurement> findPreviousMeasurement(
+		@Param("plantId") Long plantId,
+		@Param("facilityId") Long facilityId,
+		@Param("measuredAt") LocalDateTime measuredAt
+	);
+
 	Optional<EnergySummary> findLatestPlantSummary(@Param("plantId") Long plantId);
 
 	List<PeakPowerTrendPoint> findPeakPowerTrend(
@@ -131,6 +147,12 @@ public interface EnergyMapper {
 	);
 
 	List<UtilityHourlyUsage> findUtilityHourlyUsage(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	Optional<UtilityHourlyUsage> findUtilityUsageTotal(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
