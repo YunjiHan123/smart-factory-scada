@@ -79,6 +79,12 @@ button:disabled {
   min-width: 112px;
 }
 
+.light-button.compact,
+.danger-button.compact {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .ghost-button {
   min-height: 40px;
   padding: 0 18px;
@@ -823,6 +829,30 @@ input {
   border-collapse: collapse;
   table-layout: auto;
   font-size: 14px;
+}
+
+.alarm-table-scroll {
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid #dce5f2;
+  border-radius: 8px;
+}
+
+.alarm-table-scroll table {
+  margin: 0;
+}
+
+.alarm-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.alarm-action-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 th,

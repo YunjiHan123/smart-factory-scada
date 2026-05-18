@@ -176,6 +176,7 @@ export const api = {
   latestEnergy: (plantId, facilityId) => apiFetch(`/api/energy/latest/plants/${plantId}/facilities/${facilityId}`),
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),
   resolveAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}/resolve`, { method: 'PATCH' }),
+  deleteAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}`, { method: 'DELETE' }),
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
   esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),

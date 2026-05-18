@@ -52,7 +52,7 @@ JOIN facilities f ON f.id = em.facility_id
 WHERE f.id >= 10000
   AND MOD(f.id, 10000) BETWEEN 1 AND 24
   AND em.measured_at >= TIMESTAMP('2026-04-15 00:00:00')
-  AND em.measured_at < TIMESTAMP('2026-05-16 00:00:00');
+  AND em.measured_at < TIMESTAMP('2026-05-19 00:00:00');
 
 INSERT INTO energy_measurements (
     plant_id,
@@ -68,7 +68,7 @@ INSERT INTO energy_measurements (
 WITH RECURSIVE days(day_offset) AS (
     SELECT 0
     UNION ALL
-    SELECT day_offset + 1 FROM days WHERE day_offset < 30
+    SELECT day_offset + 1 FROM days WHERE day_offset < 33
 ),
 hours(hour_offset) AS (
     SELECT 0
@@ -120,26 +120,48 @@ usage_points AS (
         ) AS electricity_delta,
         ROUND(
             (
-                CASE WHEN e.facility_type = 'PAINT' THEN 2.9 ELSE 0.82 END
-                + e.plant_id * 0.06
-                + e.equipment_seq * 0.025
+                CASE e.facility_type
+                    WHEN 'PRESS' THEN 128.0
+                    WHEN 'BODY' THEN 118.0
+                    WHEN 'ASSEMBLY' THEN 110.0
+                    WHEN 'PAINT' THEN 146.0
+                    ELSE 105.0
+                END
+                + e.plant_id * 5.5
+                + e.equipment_seq * 1.65
             )
             * (0.72 + MOD(d.day_offset * 5 + h.hour_offset + e.equipment_seq, 9) * 0.035),
             3
         ) AS gas_delta,
         ROUND(
             (
-                CASE WHEN e.facility_type IN ('PAINT', 'ASSEMBLY') THEN 0.18 ELSE 0.075 END
-                + e.plant_id * 0.006
-                + e.equipment_seq * 0.002
+                CASE e.facility_type
+                    WHEN 'PRESS' THEN 4.35
+                    WHEN 'BODY' THEN 4.75
+                    WHEN 'ASSEMBLY' THEN 5.45
+                    WHEN 'PAINT' THEN 5.8
+                    ELSE 4.2
+                END
+                + e.plant_id * 0.28
+                + e.equipment_seq * 0.075
             )
             * (0.78 + MOD(d.day_offset * 3 + h.hour_offset + e.equipment_seq, 7) * 0.04),
             3
         ) AS water_delta,
         ROUND(
             CASE
-                WHEN e.facility_type = 'ASSEMBLY' AND h.hour_offset BETWEEN 7 AND 18
-                    THEN (8.5 + e.plant_id * 0.9 + e.equipment_seq * 0.18)
+                WHEN h.hour_offset BETWEEN 7 AND 18
+                    THEN (
+                        CASE e.facility_type
+                            WHEN 'PRESS' THEN 250.0
+                            WHEN 'BODY' THEN 280.0
+                            WHEN 'ASSEMBLY' THEN 330.0
+                            WHEN 'PAINT' THEN 300.0
+                            ELSE 240.0
+                        END
+                        + e.plant_id * 18.0
+                        + e.equipment_seq * 4.5
+                    )
                          * SIN((h.hour_offset - 6) / 13 * PI())
                 ELSE 0
             END,

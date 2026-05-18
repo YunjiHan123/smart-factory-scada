@@ -27,6 +27,8 @@ public interface AlarmMapper {
 
 	int resolve(@Param("id") Long id);
 
+	int deleteResolved(@Param("id") Long id);
+
 	long countOccurred(@Param("plantId") Long plantId);
 
 	long countRecentOccurred(

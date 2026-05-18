@@ -97,9 +97,15 @@ public interface EnergyMapper {
 		@Param("facilityType") FacilityType facilityType
 	);
 
+	Optional<LocalDate> findLatestFacilityLineMeasurementDate(
+		@Param("plantId") Long plantId,
+		@Param("facilityType") FacilityType facilityType
+	);
+
 	List<EnergyFacilityLineUsageResponse> findFacilityLineUsages(
 		@Param("plantId") Long plantId,
 		@Param("facilityType") FacilityType facilityType,
+		@Param("energyType") String energyType,
 		@Param("usageDate") LocalDate usageDate,
 		@Param("yesterdayDate") LocalDate yesterdayDate,
 		@Param("monthStart") LocalDate monthStart,

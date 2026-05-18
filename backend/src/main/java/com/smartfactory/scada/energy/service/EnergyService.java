@@ -262,6 +262,7 @@ public class EnergyService {
 	public List<EnergyFacilityLineUsageResponse> getFacilityLineUsages(
 		Long plantId,
 		FacilityType facilityType,
+		EnergyType energyType,
 		LocalDate targetDate
 	) {
 		if (plantId == null || facilityType == null) {
@@ -269,19 +270,27 @@ public class EnergyService {
 		}
 
 		LocalDate requestedDate = targetDate == null ? LocalDate.now() : targetDate;
+		EnergyType resolvedEnergyType = energyType == null ? EnergyType.ELECTRICITY : energyType;
 		LocalDate usageDate = energyMapper.findFacilityLineSummaryDate(plantId, facilityType, requestedDate)
+			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType)
+				.filter(requestedDate::equals))
 			.or(() -> energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType))
+			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType))
 			.orElse(requestedDate);
+		LocalDateTime usageTo = usageDate.equals(LocalDate.now())
+			? LocalDateTime.now()
+			: usageDate.plusDays(1).atStartOfDay();
 
 		return energyMapper.findFacilityLineUsages(
 			plantId,
 			facilityType,
+			resolvedEnergyType.name(),
 			usageDate,
 			usageDate.minusDays(1),
 			usageDate.withDayOfMonth(1),
 			usageDate.plusMonths(1).withDayOfMonth(1),
 			usageDate.atStartOfDay(),
-			usageDate.plusDays(1).atStartOfDay()
+			usageTo
 		);
 	}
 

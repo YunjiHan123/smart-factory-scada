@@ -605,11 +605,29 @@
         LIMIT 1
     </select>
 
+    <select id="findLatestFacilityLineMeasurementDate" resultType="java.time.LocalDate">
+        SELECT DATE(em.measured_at)
+        FROM energy_measurements em
+        JOIN facilities f ON f.id = em.facility_id
+        WHERE em.plant_id = #{plantId}
+          AND f.plant_id = #{plantId}
+          AND f.facility_type = #{facilityType}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
+        ORDER BY em.measured_at DESC, em.id DESC
+        LIMIT 1
+    </select>
+
     <select id="findFacilityLineUsages" resultMap="EnergyFacilityLineUsageResultMap">
         WITH target_summary AS (
             SELECT
                 facility_id,
-                electricity_kwh,
+                <choose>
+                    <when test="energyType == 'GAS'">gas_m3</when>
+                    <when test="energyType == 'WATER'">water_ton</when>
+                    <when test="energyType == 'SOLAR'">solar_kwh</when>
+                    <otherwise>electricity_kwh</otherwise>
+                </choose> AS usage_amount,
                 summary_at
             FROM energy_summaries
             WHERE plant_id = #{plantId}
@@ -617,26 +635,131 @@
               AND facility_id IS NOT NULL
               AND DATE(summary_at) = #{usageDate}
         ),
+        target_measurement_usage AS (
+            SELECT
+                facility_id,
+                GREATEST(
+                    MAX(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ) - MIN(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ),
+                    0
+                ) AS usage_amount,
+                MAX(measured_at) AS summary_at
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND facility_id IS NOT NULL
+              AND measured_at &gt;= #{usageFrom}
+              AND measured_at &lt; #{usageTo}
+            GROUP BY facility_id
+        ),
         yesterday_summary AS (
             SELECT
                 facility_id,
-                electricity_kwh
+                <choose>
+                    <when test="energyType == 'GAS'">gas_m3</when>
+                    <when test="energyType == 'WATER'">water_ton</when>
+                    <when test="energyType == 'SOLAR'">solar_kwh</when>
+                    <otherwise>electricity_kwh</otherwise>
+                </choose> AS usage_amount
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'DAILY'
               AND facility_id IS NOT NULL
               AND DATE(summary_at) = #{yesterdayDate}
         ),
+        yesterday_measurement_usage AS (
+            SELECT
+                facility_id,
+                GREATEST(
+                    MAX(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ) - MIN(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ),
+                    0
+                ) AS usage_amount
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND facility_id IS NOT NULL
+              AND measured_at &gt;= TIMESTAMP(#{yesterdayDate})
+              AND measured_at &lt; TIMESTAMP(#{usageDate})
+            GROUP BY facility_id
+        ),
         monthly_average AS (
             SELECT
                 facility_id,
-                AVG(COALESCE(electricity_kwh, 0)) AS monthly_average_kwh
+                AVG(COALESCE(
+                    <choose>
+                        <when test="energyType == 'GAS'">gas_m3</when>
+                        <when test="energyType == 'WATER'">water_ton</when>
+                        <when test="energyType == 'SOLAR'">solar_kwh</when>
+                        <otherwise>electricity_kwh</otherwise>
+                    </choose>,
+                    0
+                )) AS monthly_average_kwh
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'DAILY'
               AND facility_id IS NOT NULL
               AND summary_at &gt;= #{monthStart}
               AND summary_at &lt; #{nextMonthStart}
+            GROUP BY facility_id
+        ),
+        monthly_measurement_average AS (
+            SELECT
+                facility_id,
+                AVG(usage_amount) AS monthly_average_kwh
+            FROM (
+                SELECT
+                    facility_id,
+                    DATE(measured_at) AS measured_date,
+                    GREATEST(
+                        MAX(
+                            <choose>
+                                <when test="energyType == 'GAS'">gas_m3</when>
+                                <when test="energyType == 'WATER'">water_ton</when>
+                                <when test="energyType == 'SOLAR'">solar_kwh</when>
+                                <otherwise>electricity_kwh</otherwise>
+                            </choose>
+                        ) - MIN(
+                            <choose>
+                                <when test="energyType == 'GAS'">gas_m3</when>
+                                <when test="energyType == 'WATER'">water_ton</when>
+                                <when test="energyType == 'SOLAR'">solar_kwh</when>
+                                <otherwise>electricity_kwh</otherwise>
+                            </choose>
+                        ),
+                        0
+                    ) AS usage_amount
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND facility_id IS NOT NULL
+                  AND measured_at &gt;= #{monthStart}
+                  AND measured_at &lt; #{nextMonthStart}
+                GROUP BY facility_id, DATE(measured_at)
+            ) daily_measurement_usage
             GROUP BY facility_id
         ),
         latest_measurement AS (
@@ -655,28 +778,31 @@
             f.facility_type,
             f.status AS facility_status,
             CAST(#{usageDate} AS DATE) AS usage_date,
-            ROUND(COALESCE(ts.electricity_kwh, 0), 2) AS today_usage_kwh,
-            ROUND(COALESCE(ys.electricity_kwh, 0), 2) AS yesterday_usage_kwh,
-            ROUND(COALESCE(ma.monthly_average_kwh, 0), 2) AS monthly_average_kwh,
+            ROUND(COALESCE(tmu.usage_amount, ts.usage_amount, 0), 2) AS today_usage_kwh,
+            ROUND(COALESCE(ymu.usage_amount, ys.usage_amount, 0), 2) AS yesterday_usage_kwh,
+            ROUND(COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0), 2) AS monthly_average_kwh,
             ROUND(
                 CASE
-                    WHEN COALESCE(ys.electricity_kwh, 0) = 0 THEN 0
-                    ELSE (COALESCE(ts.electricity_kwh, 0) - ys.electricity_kwh) / ys.electricity_kwh * 100
+                    WHEN COALESCE(ymu.usage_amount, ys.usage_amount, 0) = 0 THEN 0
+                    ELSE (COALESCE(tmu.usage_amount, ts.usage_amount, 0) - COALESCE(ymu.usage_amount, ys.usage_amount, 0)) / COALESCE(ymu.usage_amount, ys.usage_amount, 0) * 100
                 END,
                 1
             ) AS today_vs_yesterday_rate,
             ROUND(
                 CASE
-                    WHEN COALESCE(ma.monthly_average_kwh, 0) = 0 THEN 0
-                    ELSE (COALESCE(ts.electricity_kwh, 0) - ma.monthly_average_kwh) / ma.monthly_average_kwh * 100
+                    WHEN COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0) = 0 THEN 0
+                    ELSE (COALESCE(tmu.usage_amount, ts.usage_amount, 0) - COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0)) / COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0) * 100
                 END,
                 1
             ) AS today_vs_monthly_average_rate,
-            COALESCE(lm.latest_measured_at, ts.summary_at) AS latest_measured_at
+            COALESCE(lm.latest_measured_at, tmu.summary_at, ts.summary_at) AS latest_measured_at
         FROM facilities f
         LEFT JOIN target_summary ts ON ts.facility_id = f.id
+        LEFT JOIN target_measurement_usage tmu ON tmu.facility_id = f.id
         LEFT JOIN yesterday_summary ys ON ys.facility_id = f.id
+        LEFT JOIN yesterday_measurement_usage ymu ON ymu.facility_id = f.id
         LEFT JOIN monthly_average ma ON ma.facility_id = f.id
+        LEFT JOIN monthly_measurement_average mma ON mma.facility_id = f.id
         LEFT JOIN latest_measurement lm ON lm.facility_id = f.id
         WHERE f.plant_id = #{plantId}
           AND f.facility_type = #{facilityType}
