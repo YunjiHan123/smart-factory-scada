@@ -1,5 +1,6 @@
 package com.smartfactory.scada.energy.mapper;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -10,12 +11,14 @@ import org.apache.ibatis.annotations.Param;
 import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
 import com.smartfactory.scada.energy.dto.UtilityUsagePattern;
+import com.smartfactory.scada.facility.domain.FacilityType;
 
 @Mapper
 public interface EnergyMapper {
@@ -69,6 +72,28 @@ public interface EnergyMapper {
 		@Param("facilityId") Long facilityId,
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
+	);
+
+	Optional<LocalDate> findFacilityLineSummaryDate(
+		@Param("plantId") Long plantId,
+		@Param("facilityType") FacilityType facilityType,
+		@Param("targetDate") LocalDate targetDate
+	);
+
+	Optional<LocalDate> findLatestFacilityLineSummaryDate(
+		@Param("plantId") Long plantId,
+		@Param("facilityType") FacilityType facilityType
+	);
+
+	List<EnergyFacilityLineUsageResponse> findFacilityLineUsages(
+		@Param("plantId") Long plantId,
+		@Param("facilityType") FacilityType facilityType,
+		@Param("usageDate") LocalDate usageDate,
+		@Param("yesterdayDate") LocalDate yesterdayDate,
+		@Param("monthStart") LocalDate monthStart,
+		@Param("nextMonthStart") LocalDate nextMonthStart,
+		@Param("usageFrom") LocalDateTime usageFrom,
+		@Param("usageTo") LocalDateTime usageTo
 	);
 
 	Optional<EnergyMeasurement> findLatestMeasurement(

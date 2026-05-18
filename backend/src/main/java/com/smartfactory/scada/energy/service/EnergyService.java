@@ -24,6 +24,7 @@ import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsageLogResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsagePointResponse;
+import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
@@ -37,6 +38,7 @@ import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
 import com.smartfactory.scada.energy.dto.UtilityUsageMetricResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.Facility;
+import com.smartfactory.scada.facility.domain.FacilityType;
 import com.smartfactory.scada.facility.mapper.FacilityMapper;
 
 import lombok.RequiredArgsConstructor;
@@ -189,6 +191,33 @@ public class EnergyService {
 			hourlyUsage,
 			energyMapper.findUtilityMeterStatuses(plantId, from, to),
 			energyMapper.findUtilityDailyUsagePatterns(plantId, patternFrom, to)
+		);
+	}
+
+	@Transactional(readOnly = true)
+	public List<EnergyFacilityLineUsageResponse> getFacilityLineUsages(
+		Long plantId,
+		FacilityType facilityType,
+		LocalDate targetDate
+	) {
+		if (plantId == null || facilityType == null) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		LocalDate requestedDate = targetDate == null ? LocalDate.now() : targetDate;
+		LocalDate usageDate = energyMapper.findFacilityLineSummaryDate(plantId, facilityType, requestedDate)
+			.or(() -> energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType))
+			.orElse(requestedDate);
+
+		return energyMapper.findFacilityLineUsages(
+			plantId,
+			facilityType,
+			usageDate,
+			usageDate.minusDays(1),
+			usageDate.withDayOfMonth(1),
+			usageDate.plusMonths(1).withDayOfMonth(1),
+			usageDate.atStartOfDay(),
+			usageDate.plusDays(1).atStartOfDay()
 		);
 	}
 
