@@ -15,11 +15,13 @@ import org.springframework.web.bind.annotation.RestController;
 import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
+import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerDashboardResponse;
 import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
 import com.smartfactory.scada.energy.service.EnergyService;
+import com.smartfactory.scada.facility.domain.FacilityType;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
@@ -63,6 +65,15 @@ public class EnergyMeasurementController {
 		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
 	) {
 		return energyService.getFacilityDetail(plantId, facilityId, energyType, from, to);
+	}
+
+	@GetMapping("/facility-line")
+	public List<EnergyFacilityLineUsageResponse> getFacilityLineUsages(
+		@RequestParam Long plantId,
+		@RequestParam FacilityType facilityType,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+	) {
+		return energyService.getFacilityLineUsages(plantId, facilityType, date);
 	}
 
 	@GetMapping("/peak-dashboard")

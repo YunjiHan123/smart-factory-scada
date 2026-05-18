@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   Bolt,
+  Bot,
   Cloud,
   Droplets,
   Factory,
@@ -14,6 +15,7 @@ import {
   ListOrdered,
   RadioReceiver,
   Search,
+  Send,
   SunMedium,
   Zap,
 } from 'lucide-vue-next'
@@ -35,6 +37,8 @@ const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedUtilityDate = ref(formatDateInput(new Date()))
 const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
+const chatbotQuestion = ref('')
+const chatbotSending = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
@@ -83,6 +87,7 @@ const state = reactive({
   alarms: [],
   esgScores: [],
   users: [],
+  chatbotMessages: [],
 })
 
 const energyTypeOptions = [
@@ -101,11 +106,12 @@ const navItems = [
   { id: 'peak', label: '피크 전력', icon: 'P' },
   { id: 'utility', label: '가스/용수', icon: 'U' },
   { id: 'esg', label: 'ESG 평가', icon: 'E' },
+  { id: 'chatbot', label: 'AI 상담', icon: 'AI' },
   { id: 'users', label: '사용자 관리', icon: 'M' },
   { id: 'alarms', label: '알람', icon: 'A' },
 ]
 
-const validRoutes = ['facility', 'peak', 'utility', 'esg', 'users', 'alarms']
+const validRoutes = ['facility', 'peak', 'utility', 'esg', 'chatbot', 'users', 'alarms']
 const facilityLineOptions = [
   { value: 'PRESS', label: '프레스' },
   { value: 'BODY', label: '차체' },
@@ -145,6 +151,7 @@ const activeMeta = computed(() => {
     peak: ['피크 전력 현황', '사업장별 피크 전력과 기준 초과 이력을 확인합니다.'],
     utility: ['가스/용수 모니터링', '가스와 용수 사용량을 시간대와 계측기 단위로 확인합니다.'],
     esg: ['ESG 평가 지표', '사업장별 월간 ESG 점수와 상세 지표를 확인합니다.'],
+    chatbot: ['AI 상담', '선택한 사업장의 에너지, ESG, 알람 데이터를 기준으로 질문합니다.'],
     users: ['사용자 관리', '사용자 계정과 권한 상태를 확인합니다.'],
     alarms: ['알람 관리', '발생 알람과 처리 상태를 확인합니다.'],
   }
@@ -155,6 +162,12 @@ const activeMeta = computed(() => {
 const selectedPlant = computed(() =>
   state.plants.find((plant) => Number(plant.id) === Number(selectedPlantId.value)),
 )
+const chatbotMessagesChronological = computed(() => [...state.chatbotMessages].reverse())
+const chatbotSuggestedQuestions = [
+  '오늘 전력 사용량과 ESG 상태를 요약해줘',
+  '피크 전력 위험이 있는지 알려줘',
+  '용수와 가스 사용량에서 확인할 점을 알려줘',
+]
 const selectedFacility = computed(() =>
   state.facilities.find((facility) => Number(facility.id) === Number(selectedFacilityId.value)),
 )
@@ -1295,6 +1308,11 @@ async function loadActivePageData() {
     return
   }
 
+  if (activePage.value === 'chatbot') {
+    await loadChatbotMessages()
+    return
+  }
+
   if (activePage.value === 'users') {
     const users = await api.users({ page: 0, size: 20 })
     state.users = users.items || []
@@ -1304,6 +1322,46 @@ async function loadActivePageData() {
   if (activePage.value === 'alarms') {
     state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
   }
+}
+
+async function loadChatbotMessages() {
+  if (!selectedPlantId.value) {
+    state.chatbotMessages = []
+    return
+  }
+
+  state.chatbotMessages = await api.chatbotMessages({
+    plantId: selectedPlantId.value,
+    limit: 20,
+  })
+}
+
+async function submitChatbotQuestion() {
+  const question = chatbotQuestion.value.trim()
+  if (!question || chatbotSending.value || !selectedPlantId.value) {
+    return
+  }
+
+  chatbotSending.value = true
+  try {
+    await run(async () => {
+      const response = await api.askChatbot({
+        plantId: selectedPlantId.value,
+        question,
+      })
+      state.chatbotMessages = [
+        response,
+        ...state.chatbotMessages.filter((message) => Number(message.id) !== Number(response.id)),
+      ].slice(0, 20)
+      chatbotQuestion.value = ''
+    })
+  } finally {
+    chatbotSending.value = false
+  }
+}
+
+function useSuggestedQuestion(question) {
+  chatbotQuestion.value = question
 }
 
 async function loadEnergyData() {
@@ -2592,6 +2650,74 @@ onUnmounted(() => {
               </article>
             </div>
           </article>
+        </section>
+      </section>
+
+      <section v-else-if="activePage === 'chatbot'" class="page-stack chatbot-page">
+        <section class="chatbot-layout">
+          <article class="panel chatbot-conversation-panel">
+            <div class="panel-title inline">
+              <h2>AI 상담 대화</h2>
+              <span>{{ selectedPlant?.name || '-' }}</span>
+            </div>
+
+            <div class="chatbot-message-list">
+              <article v-for="message in chatbotMessagesChronological" :key="message.id" class="chatbot-message">
+                <div class="chatbot-bubble user">
+                  <span>질문</span>
+                  <p>{{ message.question }}</p>
+                </div>
+                <div class="chatbot-bubble assistant">
+                  <span>
+                    <Bot :size="16" />
+                    {{ message.plantName || selectedPlant?.name || 'SCADA AI' }}
+                    <small>{{ formatDateTime(message.createdAt) }}</small>
+                  </span>
+                  <p>{{ message.answer }}</p>
+                </div>
+              </article>
+
+              <article v-if="!chatbotMessagesChronological.length" class="chatbot-empty">
+                <Bot :size="36" />
+                <strong>아직 질문이 없습니다</strong>
+                <p>사업장을 선택한 뒤 에너지 사용량, ESG 점수, 알람 상태를 질문해 보세요.</p>
+              </article>
+            </div>
+
+            <form class="chatbot-input-row" @submit.prevent="submitChatbotQuestion">
+              <textarea
+                v-model="chatbotQuestion"
+                rows="3"
+                placeholder="예: 오늘 전력 사용량과 ESG 상태를 요약해줘"
+                :disabled="chatbotSending || !selectedPlantId"
+              ></textarea>
+              <button
+                class="primary-button compact"
+                type="submit"
+                :disabled="chatbotSending || !chatbotQuestion.trim() || !selectedPlantId"
+              >
+                <Send :size="17" /> {{ chatbotSending ? '전송 중' : '전송' }}
+              </button>
+            </form>
+          </article>
+
+          <aside class="panel chatbot-guide-panel">
+            <div class="chatbot-guide-icon">
+              <Bot :size="30" />
+            </div>
+            <h2>질문 예시</h2>
+            <p>선택한 사업장의 최신 집계 데이터를 기준으로 답변합니다.</p>
+            <div class="chatbot-suggestion-list">
+              <button
+                v-for="question in chatbotSuggestedQuestions"
+                :key="question"
+                type="button"
+                @click="useSuggestedQuestion(question)"
+              >
+                {{ question }}
+              </button>
+            </div>
+          </aside>
         </section>
       </section>
 

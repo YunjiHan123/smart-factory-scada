@@ -79,6 +79,20 @@
         <result property="waterUsageRate" column="water_usage_rate"/>
     </resultMap>
 
+    <resultMap id="EnergyFacilityLineUsageResultMap" type="com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse">
+        <result property="facilityId" column="facility_id"/>
+        <result property="facilityName" column="facility_name"/>
+        <result property="facilityType" column="facility_type"/>
+        <result property="facilityStatus" column="facility_status"/>
+        <result property="usageDate" column="usage_date"/>
+        <result property="todayUsageKwh" column="today_usage_kwh"/>
+        <result property="yesterdayUsageKwh" column="yesterday_usage_kwh"/>
+        <result property="monthlyAverageKwh" column="monthly_average_kwh"/>
+        <result property="todayVsYesterdayRate" column="today_vs_yesterday_rate"/>
+        <result property="todayVsMonthlyAverageRate" column="today_vs_monthly_average_rate"/>
+        <result property="latestMeasuredAt" column="latest_measured_at"/>
+    </resultMap>
+
     <insert id="insertMeasurement" parameterType="com.smartfactory.scada.energy.domain.EnergyMeasurement" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO energy_measurements (
             plant_id,
@@ -409,6 +423,108 @@
         FROM ordered_measurements
         GROUP BY plant_id, facility_id, measured_date
         ORDER BY summary_at ASC
+    </select>
+
+    <select id="findFacilityLineSummaryDate" resultType="java.time.LocalDate">
+        SELECT DATE(es.summary_at)
+        FROM energy_summaries es
+        JOIN facilities f ON f.id = es.facility_id
+        WHERE es.plant_id = #{plantId}
+          AND f.plant_id = #{plantId}
+          AND f.facility_type = #{facilityType}
+          AND es.summary_type = 'DAILY'
+          AND DATE(es.summary_at) = #{targetDate}
+        LIMIT 1
+    </select>
+
+    <select id="findLatestFacilityLineSummaryDate" resultType="java.time.LocalDate">
+        SELECT DATE(es.summary_at)
+        FROM energy_summaries es
+        JOIN facilities f ON f.id = es.facility_id
+        WHERE es.plant_id = #{plantId}
+          AND f.plant_id = #{plantId}
+          AND f.facility_type = #{facilityType}
+          AND es.summary_type = 'DAILY'
+        ORDER BY es.summary_at DESC, es.id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findFacilityLineUsages" resultMap="EnergyFacilityLineUsageResultMap">
+        WITH target_summary AS (
+            SELECT
+                facility_id,
+                electricity_kwh,
+                summary_at
+            FROM energy_summaries
+            WHERE plant_id = #{plantId}
+              AND summary_type = 'DAILY'
+              AND facility_id IS NOT NULL
+              AND DATE(summary_at) = #{usageDate}
+        ),
+        yesterday_summary AS (
+            SELECT
+                facility_id,
+                electricity_kwh
+            FROM energy_summaries
+            WHERE plant_id = #{plantId}
+              AND summary_type = 'DAILY'
+              AND facility_id IS NOT NULL
+              AND DATE(summary_at) = #{yesterdayDate}
+        ),
+        monthly_average AS (
+            SELECT
+                facility_id,
+                AVG(COALESCE(electricity_kwh, 0)) AS monthly_average_kwh
+            FROM energy_summaries
+            WHERE plant_id = #{plantId}
+              AND summary_type = 'DAILY'
+              AND facility_id IS NOT NULL
+              AND summary_at &gt;= #{monthStart}
+              AND summary_at &lt; #{nextMonthStart}
+            GROUP BY facility_id
+        ),
+        latest_measurement AS (
+            SELECT
+                facility_id,
+                MAX(measured_at) AS latest_measured_at
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{usageFrom}
+              AND measured_at &lt; #{usageTo}
+            GROUP BY facility_id
+        )
+        SELECT
+            f.id AS facility_id,
+            f.name AS facility_name,
+            f.facility_type,
+            f.status AS facility_status,
+            CAST(#{usageDate} AS DATE) AS usage_date,
+            ROUND(COALESCE(ts.electricity_kwh, 0), 2) AS today_usage_kwh,
+            ROUND(COALESCE(ys.electricity_kwh, 0), 2) AS yesterday_usage_kwh,
+            ROUND(COALESCE(ma.monthly_average_kwh, 0), 2) AS monthly_average_kwh,
+            ROUND(
+                CASE
+                    WHEN COALESCE(ys.electricity_kwh, 0) = 0 THEN 0
+                    ELSE (COALESCE(ts.electricity_kwh, 0) - ys.electricity_kwh) / ys.electricity_kwh * 100
+                END,
+                1
+            ) AS today_vs_yesterday_rate,
+            ROUND(
+                CASE
+                    WHEN COALESCE(ma.monthly_average_kwh, 0) = 0 THEN 0
+                    ELSE (COALESCE(ts.electricity_kwh, 0) - ma.monthly_average_kwh) / ma.monthly_average_kwh * 100
+                END,
+                1
+            ) AS today_vs_monthly_average_rate,
+            COALESCE(lm.latest_measured_at, ts.summary_at) AS latest_measured_at
+        FROM facilities f
+        LEFT JOIN target_summary ts ON ts.facility_id = f.id
+        LEFT JOIN yesterday_summary ys ON ys.facility_id = f.id
+        LEFT JOIN monthly_average ma ON ma.facility_id = f.id
+        LEFT JOIN latest_measurement lm ON lm.facility_id = f.id
+        WHERE f.plant_id = #{plantId}
+          AND f.facility_type = #{facilityType}
+        ORDER BY f.id ASC
     </select>
 
     <select id="findLatestMeasurement" resultMap="EnergyMeasurementResultMap">
