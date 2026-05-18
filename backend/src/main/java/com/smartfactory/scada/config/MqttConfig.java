@@ -1,5 +1,7 @@
 package com.smartfactory.scada.config;
 
+import java.util.concurrent.ThreadPoolExecutor;
+
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
@@ -64,7 +66,8 @@ public class MqttConfig {
 		taskExecutor.setThreadNamePrefix("mqtt-worker-");
 		taskExecutor.setCorePoolSize(4);
 		taskExecutor.setMaxPoolSize(8);
-		taskExecutor.setQueueCapacity(200);
+		taskExecutor.setQueueCapacity(1_000);
+		taskExecutor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 		taskExecutor.initialize();
 		return taskExecutor;
 	}
