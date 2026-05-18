@@ -27,6 +27,12 @@ public class MqttConfig {
 	@Value("${mqtt.client-id}")
 	private String clientId;
 
+	@Value("${mqtt.username:}")
+	private String username;
+
+	@Value("${mqtt.password:}")
+	private String password;
+
 	@Value("${mqtt.topic}")
 	private String topic;
 
@@ -38,6 +44,12 @@ public class MqttConfig {
 		connectOptions.setCleanSession(true);
 		connectOptions.setConnectionTimeout(10);
 		connectOptions.setKeepAliveInterval(20);
+		if (!username.isBlank()) {
+			connectOptions.setUserName(username);
+		}
+		if (!password.isBlank()) {
+			connectOptions.setPassword(password.toCharArray());
+		}
 
 		DefaultMqttPahoClientFactory mqttClientFactory = new DefaultMqttPahoClientFactory();
 		mqttClientFactory.setConnectionOptions(connectOptions);
