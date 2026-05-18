@@ -1,11 +1,15 @@
 package com.smartfactory.scada.chatbot.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -26,6 +30,8 @@ import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.esg.domain.EsgScore;
 import com.smartfactory.scada.esg.mapper.EsgMapper;
@@ -42,6 +48,8 @@ public class ChatbotService {
 
 	private static final int OPENAI_CONTEXT_MESSAGE_LIMIT = 5;
 	private static final int RECENT_ALARM_LIMIT = 5;
+	private static final int TREND_DAYS = 7;
+	private static final int FACILITY_USAGE_TOP_LIMIT = 5;
 	private static final int RECENT_MESSAGE_LIMIT_DEFAULT = 20;
 	private static final int RECENT_MESSAGE_LIMIT_MAX = 100;
 
@@ -119,7 +127,9 @@ public class ChatbotService {
 				+ ", \ucd1d\uc810\uc740 " + operationalContext.latestEsgScore().getTotalScore() + "\uc810\uc785\ub2c8\ub2e4.";
 		String alarmText = buildAlarmFallbackText(operationalContext);
 		String facilityText = buildFacilityFallbackText(operationalContext.facilityStatusSummary());
-		return energyText + " " + esgText + " " + alarmText + " " + facilityText;
+		String trendText = buildTrendFallbackText(operationalContext.trendInsights());
+		String facilityLineText = buildFacilityLineFallbackText(operationalContext.facilityLineUsageSummary());
+		return energyText + " " + esgText + " " + alarmText + " " + facilityText + " " + trendText + " " + facilityLineText;
 	}
 
 	private String buildAlarmFallbackText(OperationalContext operationalContext) {
@@ -142,6 +152,35 @@ public class ChatbotService {
 			+ " \uc0c1\ud0dc\ub97c \ud655\uc778\ud558\uc138\uc694.";
 	}
 
+	private String buildTrendFallbackText(TrendInsights trendInsights) {
+		if (trendInsights.latestDate() == null) {
+			return "\ucd5c\uadfc 7\uc77c \ucd94\uc138 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
+		}
+
+		return "\ucd5c\uadfc 7\uc77c \uc804\ub825 \ud3c9\uade0\uc740 "
+			+ formatDecimal(trendInsights.sevenDayAverageElectricityKwh())
+			+ "kWh, \uc804\uc77c \ub300\ube44 "
+			+ formatDecimal(trendInsights.latestVsPreviousRate())
+			+ "%\uc785\ub2c8\ub2e4."
+			+ (trendInsights.maxPeakDate() == null
+				? ""
+				: ", \ucd5c\ub300 \ud53c\ud06c\uc77c\uc740 " + trendInsights.maxPeakDate()
+					+ " (" + formatDecimal(trendInsights.maxPeakKw()) + "kW)\uc785\ub2c8\ub2e4.");
+	}
+
+	private String buildFacilityLineFallbackText(FacilityLineUsageSummary facilityLineUsageSummary) {
+		if (facilityLineUsageSummary.topFacilities().isEmpty()) {
+			return "\ub77c\uc778\ubcc4 \uc0ac\uc6a9\ub7c9 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
+		}
+
+		return "\uc0ac\uc6a9\ub7c9 \uc0c1\uc704 \uc124\ube44\ub294 "
+			+ facilityLineUsageSummary.topFacilities()
+				.stream()
+				.map(facility -> facility.facilityName() + "(" + formatDecimal(facility.todayUsageKwh()) + "kWh)")
+				.collect(Collectors.joining(", "))
+			+ "\uc785\ub2c8\ub2e4.";
+	}
+
 	private String summarizeRecentAlarm(List<AlarmContext> recentOccurredAlarms) {
 		if (recentOccurredAlarms.isEmpty()) {
 			return "\ucd5c\uadfc \uc54c\ub78c \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
@@ -161,9 +200,24 @@ public class ChatbotService {
 
 	private OperationalContext buildOperationalContext(Long plantId) {
 		if (plantId == null) {
-			return new OperationalContext(null, null, null, 0L, List.of(), FacilityStatusSummary.empty());
+			return new OperationalContext(
+				null,
+				null,
+				null,
+				null,
+				0L,
+				List.of(),
+				FacilityStatusSummary.empty(),
+				List.of(),
+				TrendInsights.empty(),
+				FacilityLineUsageSummary.empty()
+			);
 		}
 
+		EnergySummary latestEnergySummary = energyMapper.findLatestPlantSummary(plantId).orElse(null);
+		LocalDate referenceDate = latestEnergySummary == null || latestEnergySummary.getSummaryAt() == null
+			? LocalDate.now()
+			: latestEnergySummary.getSummaryAt().toLocalDate();
 		List<AlarmContext> recentOccurredAlarms = alarmMapper.findAlarms(
 				plantId,
 				AlarmStatus.OCCURRED,
@@ -174,14 +228,124 @@ public class ChatbotService {
 			.map(AlarmContext::from)
 			.toList();
 		List<Facility> facilities = facilityMapper.findByPlantId(plantId);
+		List<DailyEnergyTrendPoint> dailyEnergyTrend = buildDailyEnergyTrend(plantId, referenceDate);
 
 		return new OperationalContext(
 			plantId,
-			energyMapper.findLatestPlantSummary(plantId).orElse(null),
+			referenceDate,
+			latestEnergySummary,
 			esgMapper.findLatestByPlantId(plantId).orElse(null),
 			alarmMapper.countOccurred(plantId),
 			recentOccurredAlarms,
-			summarizeFacilities(facilities)
+			summarizeFacilities(facilities),
+			dailyEnergyTrend,
+			buildTrendInsights(dailyEnergyTrend),
+			buildFacilityLineUsageSummary(plantId, facilities, referenceDate)
+		);
+	}
+
+	private List<DailyEnergyTrendPoint> buildDailyEnergyTrend(Long plantId, LocalDate referenceDate) {
+		LocalDate fromDate = referenceDate.minusDays(TREND_DAYS - 1L);
+		return energyMapper.findSummaries(
+				plantId,
+				null,
+				SummaryType.DAILY,
+				fromDate.atStartOfDay(),
+				referenceDate.plusDays(1).atStartOfDay()
+			)
+			.stream()
+			.filter(summary -> summary.getSummaryAt() != null)
+			.map(DailyEnergyTrendPoint::from)
+			.sorted(Comparator.comparing(DailyEnergyTrendPoint::summaryDate))
+			.toList();
+	}
+
+	private TrendInsights buildTrendInsights(List<DailyEnergyTrendPoint> dailyEnergyTrend) {
+		if (dailyEnergyTrend.isEmpty()) {
+			return TrendInsights.empty();
+		}
+
+		DailyEnergyTrendPoint latest = dailyEnergyTrend.get(dailyEnergyTrend.size() - 1);
+		DailyEnergyTrendPoint previous = dailyEnergyTrend.size() < 2
+			? null
+			: dailyEnergyTrend.get(dailyEnergyTrend.size() - 2);
+		DailyEnergyTrendPoint maxPeak = dailyEnergyTrend.stream()
+			.max(Comparator.comparing(DailyEnergyTrendPoint::peakKw))
+			.orElse(latest);
+
+		return new TrendInsights(
+			latest.summaryDate(),
+			latest.electricityKwh(),
+			previous == null ? null : previous.summaryDate(),
+			previous == null ? BigDecimal.ZERO : previous.electricityKwh(),
+			changeRate(latest.electricityKwh(), previous == null ? BigDecimal.ZERO : previous.electricityKwh()),
+			averageElectricity(dailyEnergyTrend),
+			maxPeak.summaryDate(),
+			maxPeak.peakKw()
+		);
+	}
+
+	private FacilityLineUsageSummary buildFacilityLineUsageSummary(
+		Long plantId,
+		List<Facility> facilities,
+		LocalDate referenceDate
+	) {
+		List<FacilityTypeUsageSummary> facilityTypeSummaries = new ArrayList<>();
+		List<FacilityUsageItem> allUsages = new ArrayList<>();
+
+		List<FacilityType> facilityTypes = facilities.stream()
+			.map(Facility::getFacilityType)
+			.filter(Objects::nonNull)
+			.distinct()
+			.toList();
+		for (FacilityType facilityType : facilityTypes) {
+			LocalDate usageDate = energyMapper.findFacilityLineSummaryDate(plantId, facilityType, referenceDate)
+				.or(() -> energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType))
+				.orElse(referenceDate);
+			List<EnergyFacilityLineUsageResponse> usages = energyMapper.findFacilityLineUsages(
+				plantId,
+				facilityType,
+				usageDate,
+				usageDate.minusDays(1),
+				usageDate.withDayOfMonth(1),
+				usageDate.plusMonths(1).withDayOfMonth(1),
+				usageDate.atStartOfDay(),
+				usageDate.plusDays(1).atStartOfDay()
+			);
+			List<FacilityUsageItem> usageItems = usages.stream()
+				.map(FacilityUsageItem::from)
+				.toList();
+			facilityTypeSummaries.add(summarizeFacilityType(facilityType, usageDate, usageItems));
+			allUsages.addAll(usageItems);
+		}
+
+		List<FacilityUsageItem> topFacilities = allUsages.stream()
+			.sorted(Comparator.comparing(FacilityUsageItem::todayUsageKwh).reversed())
+			.limit(FACILITY_USAGE_TOP_LIMIT)
+			.toList();
+		return new FacilityLineUsageSummary(facilityTypeSummaries, topFacilities);
+	}
+
+	private FacilityTypeUsageSummary summarizeFacilityType(
+		FacilityType facilityType,
+		LocalDate usageDate,
+		List<FacilityUsageItem> usages
+	) {
+		BigDecimal totalTodayUsageKwh = usages.stream()
+			.map(FacilityUsageItem::todayUsageKwh)
+			.reduce(BigDecimal.ZERO, BigDecimal::add);
+		FacilityUsageItem topFacility = usages.stream()
+			.max(Comparator.comparing(FacilityUsageItem::todayUsageKwh))
+			.orElse(null);
+
+		return new FacilityTypeUsageSummary(
+			facilityType,
+			usageDate.toString(),
+			usages.size(),
+			totalTodayUsageKwh,
+			average(totalTodayUsageKwh, usages.size()),
+			topFacility == null ? null : topFacility.facilityName(),
+			topFacility == null ? BigDecimal.ZERO : topFacility.todayUsageKwh()
 		);
 	}
 
@@ -203,6 +367,37 @@ public class ChatbotService {
 		return new FacilityStatusSummary(facilities.size(), statusCounts, abnormalFacilities);
 	}
 
+	private BigDecimal averageElectricity(List<DailyEnergyTrendPoint> dailyEnergyTrend) {
+		BigDecimal total = dailyEnergyTrend.stream()
+			.map(DailyEnergyTrendPoint::electricityKwh)
+			.reduce(BigDecimal.ZERO, BigDecimal::add);
+		return average(total, dailyEnergyTrend.size());
+	}
+
+	private BigDecimal average(BigDecimal total, int count) {
+		if (count <= 0) {
+			return BigDecimal.ZERO;
+		}
+		return total.divide(BigDecimal.valueOf(count), 2, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal changeRate(BigDecimal current, BigDecimal previous) {
+		if (previous == null || previous.compareTo(BigDecimal.ZERO) == 0) {
+			return BigDecimal.ZERO;
+		}
+		return zeroIfNull(current).subtract(previous)
+			.multiply(BigDecimal.valueOf(100))
+			.divide(previous, 1, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal zeroIfNull(BigDecimal value) {
+		return value == null ? BigDecimal.ZERO : value;
+	}
+
+	private String formatDecimal(BigDecimal value) {
+		return zeroIfNull(value).toPlainString();
+	}
+
 	private String serializeReferencedData(OperationalContext operationalContext) {
 		try {
 			return objectMapper.writeValueAsString(ReferencedData.from(operationalContext));
@@ -214,31 +409,174 @@ public class ChatbotService {
 
 	private record OperationalContext(
 		Long plantId,
+		LocalDate referenceDate,
 		EnergySummary latestEnergySummary,
 		EsgScore latestEsgScore,
 		long occurredAlarmCount,
 		List<AlarmContext> recentOccurredAlarms,
-		FacilityStatusSummary facilityStatusSummary
+		FacilityStatusSummary facilityStatusSummary,
+		List<DailyEnergyTrendPoint> dailyEnergyTrend,
+		TrendInsights trendInsights,
+		FacilityLineUsageSummary facilityLineUsageSummary
 	) {
 	}
 
 	private record ReferencedData(
 		Long plantId,
-		Object latestEnergySummary,
-		Object latestEsgScore,
+		String referenceDate,
+		EnergySummaryContext latestEnergySummary,
+		EsgScoreContext latestEsgScore,
 		long occurredAlarmCount,
 		List<AlarmContext> recentOccurredAlarms,
-		FacilityStatusSummary facilityStatusSummary
+		FacilityStatusSummary facilityStatusSummary,
+		List<DailyEnergyTrendPoint> dailyEnergyTrend,
+		TrendInsights trendInsights,
+		FacilityLineUsageSummary facilityLineUsageSummary
 	) {
 
 		private static ReferencedData from(OperationalContext operationalContext) {
 			return new ReferencedData(
 				operationalContext.plantId(),
-				operationalContext.latestEnergySummary(),
-				operationalContext.latestEsgScore(),
+				operationalContext.referenceDate() == null ? null : operationalContext.referenceDate().toString(),
+				EnergySummaryContext.from(operationalContext.latestEnergySummary()),
+				EsgScoreContext.from(operationalContext.latestEsgScore()),
 				operationalContext.occurredAlarmCount(),
 				operationalContext.recentOccurredAlarms(),
-				operationalContext.facilityStatusSummary()
+				operationalContext.facilityStatusSummary(),
+				operationalContext.dailyEnergyTrend(),
+				operationalContext.trendInsights(),
+				operationalContext.facilityLineUsageSummary()
+			);
+		}
+	}
+
+	private record EnergySummaryContext(
+		String summaryAt,
+		BigDecimal electricityKwh,
+		BigDecimal gasM3,
+		BigDecimal waterTon,
+		BigDecimal solarKwh,
+		BigDecimal peakKw,
+		BigDecimal carbonEmission
+	) {
+
+		private static EnergySummaryContext from(EnergySummary summary) {
+			if (summary == null) {
+				return null;
+			}
+			return new EnergySummaryContext(
+				summary.getSummaryAt() == null ? null : summary.getSummaryAt().toString(),
+				summary.getElectricityKwh(),
+				summary.getGasM3(),
+				summary.getWaterTon(),
+				summary.getSolarKwh(),
+				summary.getPeakKw(),
+				summary.getCarbonEmission()
+			);
+		}
+	}
+
+	private record EsgScoreContext(
+		String targetMonth,
+		BigDecimal totalScore,
+		String grade
+	) {
+
+		private static EsgScoreContext from(EsgScore score) {
+			if (score == null) {
+				return null;
+			}
+			return new EsgScoreContext(
+				score.getTargetMonth() == null ? null : score.getTargetMonth().toString(),
+				score.getTotalScore(),
+				score.getGrade() == null ? null : score.getGrade().name()
+			);
+		}
+	}
+
+	private record DailyEnergyTrendPoint(
+		String summaryDate,
+		BigDecimal electricityKwh,
+		BigDecimal gasM3,
+		BigDecimal waterTon,
+		BigDecimal solarKwh,
+		BigDecimal peakKw,
+		BigDecimal carbonEmission
+	) {
+
+		private static DailyEnergyTrendPoint from(EnergySummary summary) {
+			return new DailyEnergyTrendPoint(
+				summary.getSummaryAt().toLocalDate().toString(),
+				zeroIfNullStatic(summary.getElectricityKwh()),
+				zeroIfNullStatic(summary.getGasM3()),
+				zeroIfNullStatic(summary.getWaterTon()),
+				zeroIfNullStatic(summary.getSolarKwh()),
+				zeroIfNullStatic(summary.getPeakKw()),
+				zeroIfNullStatic(summary.getCarbonEmission())
+			);
+		}
+	}
+
+	private record TrendInsights(
+		String latestDate,
+		BigDecimal latestElectricityKwh,
+		String previousDate,
+		BigDecimal previousElectricityKwh,
+		BigDecimal latestVsPreviousRate,
+		BigDecimal sevenDayAverageElectricityKwh,
+		String maxPeakDate,
+		BigDecimal maxPeakKw
+	) {
+
+		private static TrendInsights empty() {
+			return new TrendInsights(null, BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, BigDecimal.ZERO);
+		}
+	}
+
+	private record FacilityLineUsageSummary(
+		List<FacilityTypeUsageSummary> facilityTypeSummaries,
+		List<FacilityUsageItem> topFacilities
+	) {
+
+		private static FacilityLineUsageSummary empty() {
+			return new FacilityLineUsageSummary(List.of(), List.of());
+		}
+	}
+
+	private record FacilityTypeUsageSummary(
+		FacilityType facilityType,
+		String usageDate,
+		int facilityCount,
+		BigDecimal totalTodayUsageKwh,
+		BigDecimal averageTodayUsageKwh,
+		String topFacilityName,
+		BigDecimal topFacilityUsageKwh
+	) {
+	}
+
+	private record FacilityUsageItem(
+		Long facilityId,
+		String facilityName,
+		FacilityType facilityType,
+		FacilityStatus facilityStatus,
+		String usageDate,
+		BigDecimal todayUsageKwh,
+		BigDecimal todayVsYesterdayRate,
+		BigDecimal todayVsMonthlyAverageRate,
+		String latestMeasuredAt
+	) {
+
+		private static FacilityUsageItem from(EnergyFacilityLineUsageResponse usage) {
+			return new FacilityUsageItem(
+				usage.getFacilityId(),
+				usage.getFacilityName(),
+				usage.getFacilityType(),
+				usage.getFacilityStatus(),
+				usage.getUsageDate() == null ? null : usage.getUsageDate().toString(),
+				zeroIfNullStatic(usage.getTodayUsageKwh()),
+				zeroIfNullStatic(usage.getTodayVsYesterdayRate()),
+				zeroIfNullStatic(usage.getTodayVsMonthlyAverageRate()),
+				usage.getLatestMeasuredAt() == null ? null : usage.getLatestMeasuredAt().toString()
 			);
 		}
 	}
@@ -298,5 +636,9 @@ public class ChatbotService {
 				facility.getStatus()
 			);
 		}
+	}
+
+	private static BigDecimal zeroIfNullStatic(BigDecimal value) {
+		return value == null ? BigDecimal.ZERO : value;
 	}
 }

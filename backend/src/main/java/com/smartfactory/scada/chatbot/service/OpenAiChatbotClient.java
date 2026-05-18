@@ -30,6 +30,8 @@ public class OpenAiChatbotClient {
 		Do not guess numbers, causes, or plant states that are not present in the reference data.
 		If active alarms or abnormal facilities exist, mention them before general energy or ESG summaries.
 		Use alarm level, alarm type, alarm message, facility name, and facility status only when they are present.
+		For trend questions, use the dailyEnergyTrend and trendInsights data with dates and units.
+		For line usage questions, use facilityLineUsageSummary and name the top facilities when available.
 		When mentioning electricity, use kWh. When mentioning peak power, use kW.
 		When mentioning ESG, include both the score and grade if they are available.
 		Suggest one immediate next check for the operator in a single sentence.

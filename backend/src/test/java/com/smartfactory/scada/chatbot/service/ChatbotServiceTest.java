@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willAnswer;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +37,8 @@ import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.esg.domain.EsgGrade;
 import com.smartfactory.scada.esg.domain.EsgScore;
@@ -119,6 +123,9 @@ class ChatbotServiceTest {
 		assertThat(savedMessage.getReferencedData()).contains("\"recentOccurredAlarms\"");
 		assertThat(savedMessage.getReferencedData()).contains("\"facilityStatusSummary\"");
 		assertThat(savedMessage.getReferencedData()).contains("\"abnormalFacilities\"");
+		assertThat(savedMessage.getReferencedData()).contains("\"dailyEnergyTrend\"");
+		assertThat(savedMessage.getReferencedData()).contains("\"trendInsights\"");
+		assertThat(savedMessage.getReferencedData()).contains("\"facilityLineUsageSummary\"");
 		assertThat(response.answer()).isEqualTo("AI generated answer");
 	}
 
@@ -143,7 +150,17 @@ class ChatbotServiceTest {
 			new ChatbotMessageRequest(1L, "summary")
 		);
 
-		assertThat(response.answer()).contains("1234.50kWh", "1400.00kW", "AA", "91.20", "Press Line 1", "WARNING");
+		assertThat(response.answer()).contains(
+			"1234.50kWh",
+			"1400.00kW",
+			"AA",
+			"91.20",
+			"Press Line 1",
+			"WARNING",
+			"1200.00kWh",
+			"7.1%",
+			"1600.00kWh"
+		);
 	}
 
 	@Test
@@ -215,6 +232,28 @@ class ChatbotServiceTest {
 	}
 
 	@Test
+	void askFallbackHandlesEmptyTrendAndLineUsageData() {
+		given(energyMapper.findLatestPlantSummary(1L)).willReturn(Optional.empty());
+		given(esgMapper.findLatestByPlantId(1L)).willReturn(Optional.empty());
+		stubOperationalContext(1L, List.of(), 0L, List.of(), List.of(), List.of());
+		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
+		given(openAiChatbotClient.generateAnswer(eq("summary"), anyString(), eq(List.of())))
+			.willReturn(Optional.empty());
+		stubInsertId();
+		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
+
+		ChatbotMessageResponse response = chatbotService.ask(
+			authenticatedUser(1L),
+			new ChatbotMessageRequest(1L, "summary")
+		);
+
+		assertThat(response.answer()).contains(
+			"\ucd5c\uadfc 7\uc77c \ucd94\uc138 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.",
+			"\ub77c\uc778\ubcc4 \uc0ac\uc6a9\ub7c9 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."
+		);
+	}
+
+	@Test
 	void askThrowsAuthenticationRequiredWhenUserIsMissing() {
 		assertThatThrownBy(() -> chatbotService.ask(null, new ChatbotMessageRequest(1L, "summary")))
 			.isInstanceOfSatisfying(BusinessException.class, exception ->
@@ -226,9 +265,47 @@ class ChatbotServiceTest {
 	}
 
 	private void stubOperationalContext(Long plantId, List<Alarm> alarms, long occurredAlarmCount, List<Facility> facilities) {
+		stubOperationalContext(plantId, alarms, occurredAlarmCount, facilities, trendSummaries(), lineUsages());
+	}
+
+	private void stubOperationalContext(
+		Long plantId,
+		List<Alarm> alarms,
+		long occurredAlarmCount,
+		List<Facility> facilities,
+		List<EnergySummary> trendSummaries,
+		List<EnergyFacilityLineUsageResponse> lineUsages
+	) {
 		given(alarmMapper.findAlarms(plantId, AlarmStatus.OCCURRED, null, 5)).willReturn(alarms);
 		given(alarmMapper.countOccurred(plantId)).willReturn(occurredAlarmCount);
 		given(facilityMapper.findByPlantId(plantId)).willReturn(facilities);
+		given(energyMapper.findSummaries(
+			eq(plantId),
+			isNull(),
+			eq(SummaryType.DAILY),
+			any(LocalDateTime.class),
+			any(LocalDateTime.class)
+		)).willReturn(trendSummaries);
+
+		facilities.stream()
+			.map(Facility::getFacilityType)
+			.distinct()
+			.forEach(facilityType -> {
+				given(energyMapper.findFacilityLineSummaryDate(eq(plantId), eq(facilityType), any(LocalDate.class)))
+					.willReturn(Optional.of(LocalDate.of(2026, 5, 18)));
+				given(energyMapper.findFacilityLineUsages(
+					eq(plantId),
+					eq(facilityType),
+					any(LocalDate.class),
+					any(LocalDate.class),
+					any(LocalDate.class),
+					any(LocalDate.class),
+					any(LocalDateTime.class),
+					any(LocalDateTime.class)
+				)).willReturn(lineUsages.stream()
+					.filter(usage -> usage.getFacilityType() == facilityType)
+					.toList());
+			});
 	}
 
 	private void stubInsertId() {
@@ -284,9 +361,58 @@ class ChatbotServiceTest {
 		return facility;
 	}
 
+	private List<EnergySummary> trendSummaries() {
+		return List.of(
+			trendSummary(LocalDate.of(2026, 5, 12), "900.00", "1000.00"),
+			trendSummary(LocalDate.of(2026, 5, 13), "1000.00", "1100.00"),
+			trendSummary(LocalDate.of(2026, 5, 14), "1100.00", "1200.00"),
+			trendSummary(LocalDate.of(2026, 5, 15), "1200.00", "1300.00"),
+			trendSummary(LocalDate.of(2026, 5, 16), "1300.00", "1400.00"),
+			trendSummary(LocalDate.of(2026, 5, 17), "1400.00", "1500.00"),
+			trendSummary(LocalDate.of(2026, 5, 18), "1500.00", "1600.00")
+		);
+	}
+
+	private EnergySummary trendSummary(LocalDate date, String electricityKwh, String peakKw) {
+		EnergySummary summary = new EnergySummary();
+		summary.setPlantId(1L);
+		summary.setSummaryAt(date.atStartOfDay());
+		summary.setElectricityKwh(new BigDecimal(electricityKwh));
+		summary.setPeakKw(new BigDecimal(peakKw));
+		return summary;
+	}
+
+	private List<EnergyFacilityLineUsageResponse> lineUsages() {
+		return List.of(
+			lineUsage(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.WARNING, "1600.00"),
+			lineUsage(102L, "Press Line 2", FacilityType.PRESS, FacilityStatus.RUNNING, "1200.00")
+		);
+	}
+
+	private EnergyFacilityLineUsageResponse lineUsage(
+		Long facilityId,
+		String facilityName,
+		FacilityType facilityType,
+		FacilityStatus status,
+		String todayUsageKwh
+	) {
+		EnergyFacilityLineUsageResponse response = new EnergyFacilityLineUsageResponse();
+		response.setFacilityId(facilityId);
+		response.setFacilityName(facilityName);
+		response.setFacilityType(facilityType);
+		response.setFacilityStatus(status);
+		response.setUsageDate(LocalDate.of(2026, 5, 18));
+		response.setTodayUsageKwh(new BigDecimal(todayUsageKwh));
+		response.setTodayVsYesterdayRate(new BigDecimal("7.1"));
+		response.setTodayVsMonthlyAverageRate(new BigDecimal("10.0"));
+		response.setLatestMeasuredAt(LocalDateTime.of(2026, 5, 18, 10, 0));
+		return response;
+	}
+
 	private EnergySummary energySummary() {
 		EnergySummary summary = new EnergySummary();
 		summary.setPlantId(1L);
+		summary.setSummaryAt(LocalDate.of(2026, 5, 18).atStartOfDay());
 		summary.setElectricityKwh(new BigDecimal("1234.50"));
 		summary.setPeakKw(new BigDecimal("1400.00"));
 		return summary;
