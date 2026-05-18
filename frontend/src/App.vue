@@ -26,18 +26,35 @@ const loading = ref(false)
 const errorMessage = ref('')
 const selectedPlantId = ref(null)
 const selectedFacilityId = ref(null)
+const selectedFacilityLine = ref('PRESS')
+const selectedFacilityDate = ref(formatDateInput(new Date()))
 const selectedEnergyType = ref('ELECTRICITY')
 const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedUtilityDate = ref(formatDateInput(new Date()))
-const selectedEsgFrom = ref(formatDateInput(new Date()))
-const selectedEsgTo = ref(formatDateInput(new Date()))
+const utilityMeterSearch = ref('')
+const utilityTooltip = ref(null)
+const selectedEsgMonth = ref(formatMonthInput(new Date()))
+const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
+const selectedEsgTo = ref(formatMonthEndInput(new Date()))
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
+let energyPollTimer = null
+let latestEnergyPollInFlight = false
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
+let lastPeakRefreshAt = 0
+let lastUtilityRefreshAt = 0
+let lastAlarmRefreshAt = 0
+const LIVE_SERIES_LIMIT = 120
+const LIVE_STALE_MS = 5000
+const LIVE_POLL_MS = 1000
+const LIVE_DASHBOARD_REFRESH_MS = 10000
+const liveEnergyByFacility = reactive(new Map())
+const liveEnergyBaselineByFacility = reactive(new Map())
+const liveEnergySeriesByFacility = reactive(new Map())
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -62,6 +79,7 @@ const state = reactive({
   utilityDashboard: null,
   esgDashboard: null,
   facilityDetail: null,
+  facilityLineUsages: [],
   alarms: [],
   esgScores: [],
   users: [],
@@ -88,13 +106,45 @@ const navItems = [
 ]
 
 const validRoutes = ['facility', 'peak', 'utility', 'esg', 'users', 'alarms']
+const facilityLineOptions = [
+  { value: 'PRESS', label: '프레스' },
+  { value: 'BODY', label: '차체' },
+  { value: 'ASSEMBLY', label: '의장' },
+  { value: 'PAINT', label: '도장' },
+]
+const equipmentProcessNames = {
+  1: '메인 프레스기',
+  2: '블랭킹 프레스',
+  3: '코일 피더',
+  4: '금형 교환기',
+  5: '유압 펌프',
+  6: '배출 컨베이어',
+  7: '용접 로봇',
+  8: '지그 시스템',
+  9: '이송 컨베이어',
+  10: '스폿 용접기',
+  11: '검사 카메라',
+  12: '보정 장치',
+  13: '조립 로봇',
+  14: '체결 토크 장치',
+  15: '부품 공급 장치',
+  16: '도어 장착 장치',
+  17: '시트 장착 리프트',
+  18: '최종 검사기',
+  19: '전처리 탱크',
+  20: '분사 로봇',
+  21: '건조 오븐',
+  22: '배기 처리 설비',
+  23: '도료 공급 펌프',
+  24: '도막 검사기',
+}
 
 const activeMeta = computed(() => {
   const meta = {
-    facility: ['설비별 에너지 현황', '사업장, 설비, 에너지 요약, 최신 수집값을 확인합니다.'],
-    peak: ['피크 전력 현황', '피크 전력과 발생 알람을 확인합니다.'],
-    utility: ['가스/용수 모니터링', '가스와 용수 사용량을 설비 단위로 확인합니다.'],
-    esg: ['ESG 평가 지표', '사업장별 ESG 점수를 확인합니다.'],
+    facility: ['설비별 에너지 현황', '사업장, 설비 라인, 조회일 기준의 전기 사용량을 확인합니다.'],
+    peak: ['피크 전력 현황', '사업장별 피크 전력과 기준 초과 이력을 확인합니다.'],
+    utility: ['가스/용수 모니터링', '가스와 용수 사용량을 시간대와 계측기 단위로 확인합니다.'],
+    esg: ['ESG 평가 지표', '사업장별 월간 ESG 점수와 상세 지표를 확인합니다.'],
     users: ['사용자 관리', '사용자 계정과 권한 상태를 확인합니다.'],
     alarms: ['알람 관리', '발생 알람과 처리 상태를 확인합니다.'],
   }
@@ -102,26 +152,317 @@ const activeMeta = computed(() => {
   return { title, description }
 })
 
-const selectedPlant = computed(() => state.plants.find((plant) => plant.id === selectedPlantId.value))
-const selectedFacility = computed(() => state.facilities.find((facility) => facility.id === selectedFacilityId.value))
+const selectedPlant = computed(() =>
+  state.plants.find((plant) => Number(plant.id) === Number(selectedPlantId.value)),
+)
+const selectedFacility = computed(() =>
+  state.facilities.find((facility) => Number(facility.id) === Number(selectedFacilityId.value)),
+)
+const selectedFacilityLineMeta = computed(
+  () => facilityLineOptions.find((option) => option.value === selectedFacilityLine.value) || facilityLineOptions[0],
+)
 const latestSummary = computed(() => state.overview?.latestEnergySummary || state.summaries.at(-1) || null)
 const latestEsg = computed(() => state.overview?.latestEsgScore || state.esgScores[0] || null)
 const recentSummaries = computed(() => state.summaries.slice(-8))
-const latestMeasuredAt = computed(() => metricValue(state.latestEnergy, 'measuredAt', 'measured_at'))
+const liveEnergyEntries = computed(() => Array.from(liveEnergyByFacility.values()))
+const selectedFacilityLiveEnergy = computed(() => {
+  if (!selectedPlantId.value || !selectedFacilityId.value) {
+    return null
+  }
+  return liveEnergyByFacility.get(energyKey(selectedPlantId.value, selectedFacilityId.value)) || null
+})
+const selectedPlantLiveEnergy = computed(() => {
+  const plantId = Number(selectedPlantId.value)
+  if (!Number.isFinite(plantId)) {
+    return null
+  }
+
+  const rows = liveEnergyEntries.value.filter((row) =>
+    Number(row.plantId) === plantId && isLineFacilityId(row.facilityId, plantId),
+  )
+  if (!rows.length) {
+    return null
+  }
+
+  const latestRow = rows.reduce((latest, row) => {
+    const latestTime = Date.parse(latest?.measuredAt || '')
+    const rowTime = Date.parse(row.measuredAt || '')
+    return rowTime > latestTime ? row : latest
+  }, rows[0])
+
+  return rows.reduce(
+    (sum, row) => ({
+      plantId,
+      facilityId: null,
+      measuredAt: latestRow?.measuredAt || sum.measuredAt,
+      electricityKwh: sum.electricityKwh + metricNumber(row, 'electricityKwh', 'electricity_kwh'),
+      gasM3: sum.gasM3 + metricNumber(row, 'gasM3', 'gas_m3'),
+      waterTon: sum.waterTon + metricNumber(row, 'waterTon', 'water_ton'),
+      solarKwh: sum.solarKwh + metricNumber(row, 'solarKwh', 'solar_kwh'),
+      peakKw: sum.peakKw + metricNumber(row, 'peakKw', 'peak_kw'),
+    }),
+    {
+      plantId,
+      facilityId: null,
+      measuredAt: latestRow?.measuredAt || null,
+      electricityKwh: 0,
+      gasM3: 0,
+      waterTon: 0,
+      solarKwh: 0,
+      peakKw: 0,
+    },
+  )
+})
+const selectedPlantDailyLiveUsage = computed(() => {
+  const plantId = Number(selectedPlantId.value)
+  if (!Number.isFinite(plantId)) {
+    return { electricityKwh: 0, gasM3: 0, waterTon: 0, solarKwh: 0 }
+  }
+
+  return liveEnergyEntries.value
+    .filter((row) => Number(row.plantId) === plantId && isLineFacilityId(row.facilityId, plantId))
+    .reduce(
+      (sum, row) => {
+        const baseline = liveEnergyBaselineByFacility.get(energyKey(row.plantId, row.facilityId))
+        return {
+          electricityKwh: sum.electricityKwh + Number(dailyLiveUsage(row, baseline, 'electricityKwh', 'electricity_kwh') || 0),
+          gasM3: sum.gasM3 + Number(dailyLiveUsage(row, baseline, 'gasM3', 'gas_m3') || 0),
+          waterTon: sum.waterTon + Number(dailyLiveUsage(row, baseline, 'waterTon', 'water_ton') || 0),
+          solarKwh: sum.solarKwh + Number(dailyLiveUsage(row, baseline, 'solarKwh', 'solar_kwh') || 0),
+        }
+      },
+      { electricityKwh: 0, gasM3: 0, waterTon: 0, solarKwh: 0 },
+    )
+})
+const selectedLiveEnergy = computed(() =>
+  selectedFacilityId.value ? selectedFacilityLiveEnergy.value : selectedPlantLiveEnergy.value,
+)
+const liveEnergySource = computed(() => selectedLiveEnergy.value || state.latestEnergy || latestSummary.value || null)
+const liveEnergyFresh = computed(() => {
+  const measuredAt = metricValue(liveEnergySource.value, 'measuredAt', 'measured_at')
+  return measuredAt ? Date.now() - Date.parse(measuredAt) <= LIVE_STALE_MS : false
+})
+const latestMeasuredAt = computed(() => metricValue(liveEnergySource.value, 'measuredAt', 'measured_at'))
 const selectedEnergyMeta = computed(
   () => energyTypeOptions.find((option) => option.value === selectedEnergyType.value) || energyTypeOptions[0],
 )
-const facilityDetailChart = computed(() => state.facilityDetail?.chart || [])
-const facilityDetailLogs = computed(() => state.facilityDetail?.logs || [])
+const isAdminUser = computed(() => state.me?.role === 'ADMIN')
+const canViewAllPlants = computed(() => isAdminUser.value)
+const assignedPlantId = computed(() => {
+  const plantId = Number(state.me?.plantId)
+  return Number.isFinite(plantId) && plantId > 0 ? plantId : null
+})
+const selectedFacilityDateIsToday = computed(() => selectedFacilityDate.value === formatDateInput(new Date()))
+const facilityEquipmentCards = computed(() => {
+  const cards = state.facilityLineUsages.length
+    ? state.facilityLineUsages
+    : state.facilities
+    .filter((facility) => facility.facilityType === selectedFacilityLine.value && Number(facility.id) >= 10000)
+    .map((facility) => ({
+      facilityId: facility.id,
+      facilityName: facility.name,
+      facilityType: facility.facilityType,
+      facilityStatus: facility.status,
+      usageDate: selectedFacilityDate.value,
+      todayUsageKwh: 0,
+      yesterdayUsageKwh: 0,
+      monthlyAverageKwh: 0,
+      todayVsYesterdayRate: 0,
+      todayVsMonthlyAverageRate: 0,
+      latestMeasuredAt: null,
+    }))
+
+  if (!selectedFacilityDateIsToday.value) {
+    return cards
+  }
+
+  return cards.map((facility) => {
+    const key = energyKey(selectedPlantId.value, facility.facilityId)
+    const live = liveEnergyByFacility.get(key)
+    if (!live) {
+      return facility
+    }
+
+    const liveUsage = dailyLiveUsage(live, liveEnergyBaselineByFacility.get(key), 'electricityKwh', 'electricity_kwh')
+    const displayUsage = Math.max(Number(facility.todayUsageKwh || 0), Number(liveUsage || 0))
+    const monthlyAverage = Number(facility.monthlyAverageKwh || 0)
+    return {
+      ...facility,
+      todayUsageKwh: displayUsage,
+      todayVsMonthlyAverageRate: calculateChangeRate(displayUsage, monthlyAverage),
+      latestMeasuredAt: live.measuredAt || facility.latestMeasuredAt,
+    }
+  })
+})
+const selectedFacilityUsage = computed(() =>
+  facilityEquipmentCards.value.find((facility) => Number(facility.facilityId) === Number(selectedFacilityId.value)) ||
+  null,
+)
+const facilitySummaryChart = computed(() =>
+  state.summaries.slice(-7).map((summary) => ({
+    date: formatDate(summary.summaryAt),
+    summaryAt: summary.summaryAt,
+    usage: usageValueForEnergyType(summary, selectedEnergyType.value) || 0,
+  })),
+)
+const facilityDetailChart = computed(() =>
+  state.facilityDetail?.chart?.length ? state.facilityDetail.chart : facilitySummaryChart.value,
+)
+const facilityDetailLogs = computed(() => {
+  if (state.facilityDetail?.logs?.length) {
+    return state.facilityDetail.logs
+  }
+
+  return facilityDetailChart.value
+    .map((point, index, rows) => {
+      const previousUsage = Number(rows[index - 1]?.usage || 0)
+      const usage = Number(point.usage || 0)
+      const changeAmount = usage - previousUsage
+      return {
+        measuredAt: point.summaryAt || point.date,
+        usage,
+        changeAmount,
+        changeRate: calculateChangeRate(usage, previousUsage),
+      }
+    })
+    .reverse()
+})
 const facilityDetailMaxUsage = computed(() =>
   Math.max(1, ...facilityDetailChart.value.map((point) => Number(point.usage || 0))),
 )
-const facilityTodayUsage = computed(() => state.facilityDetail?.todayUsage ?? 0)
-const facilityChangeAmount = computed(() => state.facilityDetail?.changeAmount ?? 0)
-const facilityChangeRate = computed(() => state.facilityDetail?.changeRate ?? 0)
+const facilityTodayUsage = computed(() => {
+  return selectedFacilityUsage.value?.todayUsageKwh ?? state.facilityDetail?.todayUsage ?? facilityDetailChart.value.at(-1)?.usage ?? 0
+})
+const facilityChangeAmount = computed(() =>
+  state.facilityDetail?.changeAmount ??
+  Number(selectedFacilityUsage.value?.todayUsageKwh || 0) - Number(selectedFacilityUsage.value?.yesterdayUsageKwh || 0),
+)
+const facilityChangeRate = computed(() =>
+  state.facilityDetail?.changeRate ?? selectedFacilityUsage.value?.todayVsYesterdayRate ?? facilityDetailLogs.value[0]?.changeRate ?? 0,
+)
 
 function metricValue(source, camelKey, snakeKey = camelKey) {
   return source?.[camelKey] ?? source?.[snakeKey]
+}
+
+function metricNumber(source, camelKey, snakeKey = camelKey) {
+  const value = metricValue(source, camelKey, snakeKey)
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function energyKey(plantId, facilityId) {
+  return `${Number(plantId)}:${Number(facilityId)}`
+}
+
+function dailyLiveUsage(live, baseline, camelKey, snakeKey = camelKey) {
+  if (!live || !baseline) {
+    return null
+  }
+  const liveValue = metricNumber(live, camelKey, snakeKey)
+  const baselineValue = metricNumber(baseline, camelKey, snakeKey)
+  return Math.max(0, liveValue - baselineValue)
+}
+
+function allLineFacilityIds(plantId = selectedPlantId.value) {
+  const numericPlantId = Number(plantId)
+  if (!Number.isFinite(numericPlantId) || numericPlantId <= 0) {
+    return []
+  }
+  return Array.from({ length: 24 }, (_, index) => (numericPlantId * 10000) + index + 1)
+}
+
+function isLineFacilityId(facilityId, plantId = selectedPlantId.value) {
+  const numericFacilityId = Number(facilityId)
+  const numericPlantId = Number(plantId)
+  if (!Number.isFinite(numericFacilityId) || numericFacilityId < 10000) {
+    return false
+  }
+  const sequence = numericFacilityId % 10000
+  return (
+    sequence >= 1 &&
+    sequence <= 24 &&
+    (!Number.isFinite(numericPlantId) || Math.floor(numericFacilityId / 10000) === numericPlantId)
+  )
+}
+
+function normalizeEnergyMessage(source) {
+  if (!source) {
+    return null
+  }
+
+  const plantId = Number(metricValue(source, 'plantId', 'plant_id'))
+  const facilityId = Number(metricValue(source, 'facilityId', 'facility_id'))
+  const measuredAt = metricValue(source, 'measuredAt', 'measured_at')
+
+  if (!Number.isFinite(plantId) || !Number.isFinite(facilityId) || !measuredAt) {
+    return null
+  }
+
+  return {
+    plantId,
+    facilityId,
+    measuredAt,
+    electricityKwh: metricNumber(source, 'electricityKwh', 'electricity_kwh'),
+    gasM3: metricNumber(source, 'gasM3', 'gas_m3'),
+    waterTon: metricNumber(source, 'waterTon', 'water_ton'),
+    solarKwh: metricNumber(source, 'solarKwh', 'solar_kwh'),
+    peakKw: metricNumber(source, 'peakKw', 'peak_kw'),
+  }
+}
+
+function rememberEnergyMessage(source) {
+  const message = normalizeEnergyMessage(source)
+  if (!message) {
+    return null
+  }
+
+  const key = energyKey(message.plantId, message.facilityId)
+  if (formatDate(message.measuredAt) === formatDateInput(new Date())) {
+    const baseline = liveEnergyBaselineByFacility.get(key)
+    const messageTime = formatTime(message.measuredAt)
+    const baselineTime = formatTime(baseline?.measuredAt)
+    if (!baseline || formatDate(baseline.measuredAt) !== formatDateInput(new Date()) || messageTime < baselineTime) {
+      liveEnergyBaselineByFacility.set(key, message)
+    }
+  }
+
+  const previous = liveEnergyByFacility.get(key)
+  const previousTime = Date.parse(previous?.measuredAt || '')
+  const nextTime = Date.parse(message.measuredAt)
+  if (Number.isFinite(previousTime) && Number.isFinite(nextTime) && nextTime < previousTime) {
+    return previous
+  }
+
+  liveEnergyByFacility.set(key, message)
+
+  const series = liveEnergySeriesByFacility.get(key) || []
+  series.push(message)
+  if (series.length > LIVE_SERIES_LIMIT) {
+    series.splice(0, series.length - LIVE_SERIES_LIMIT)
+  }
+  liveEnergySeriesByFacility.set(key, series)
+
+  return message
+}
+
+function usageValueForEnergyType(source, energyType) {
+  if (!source) {
+    return null
+  }
+  const values = {
+    ELECTRICITY: metricNumber(source, 'electricityKwh', 'electricity_kwh'),
+    GAS: metricNumber(source, 'gasM3', 'gas_m3'),
+    WATER: metricNumber(source, 'waterTon', 'water_ton'),
+    SOLAR: metricNumber(source, 'solarKwh', 'solar_kwh'),
+  }
+  return values[energyType] ?? null
+}
+
+function calculateChangeRate(currentUsage, previousUsage) {
+  const current = Number(currentUsage || 0)
+  const previous = Number(previousUsage || 0)
+  return previous === 0 ? 0 : ((current - previous) / previous) * 100
 }
 
 const summaryChartRows = computed(() => {
@@ -132,11 +473,11 @@ const summaryChartRows = computed(() => {
     live: false,
   }))
 
-  if (state.latestEnergy) {
+  if (liveEnergySource.value) {
     rows.push({
       id: 'live-latest',
       label: '현재',
-      value: Number(metricValue(state.latestEnergy, 'electricityKwh', 'electricity_kwh') || 0),
+      value: metricNumber(liveEnergySource.value, 'electricityKwh', 'electricity_kwh'),
       live: true,
       measuredAt: latestMeasuredAt.value,
     })
@@ -176,6 +517,31 @@ function formatDateInput(date) {
   return `${year}-${month}-${day}`
 }
 
+function formatMonthInput(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function formatMonthStartInput(date) {
+  return `${formatMonthInput(date)}-01`
+}
+
+function formatMonthEndInput(date) {
+  const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0)
+  return formatDateInput(monthEnd)
+}
+
+function monthRange(month) {
+  const [year, monthIndex] = String(month || formatMonthInput(new Date())).split('-').map(Number)
+  const start = new Date(year, monthIndex - 1, 1)
+  const end = new Date(year, monthIndex, 0)
+  return {
+    from: formatDateInput(start),
+    to: formatDateInput(end),
+  }
+}
+
 function trendClass(value) {
   const numericValue = Number(value || 0)
   if (numericValue > 0) {
@@ -204,6 +570,9 @@ function meterTypeLabel(type) {
 }
 
 function meterStatusLabel(status) {
+  if (!selectedUtilityDateIsToday.value) {
+    return '-'
+  }
   const labels = {
     NORMAL: '정상',
     DELAY: '지연',
@@ -213,6 +582,9 @@ function meterStatusLabel(status) {
 }
 
 function meterStatusClass(status) {
+  if (!selectedUtilityDateIsToday.value) {
+    return 'neutral'
+  }
   if (status === 'NORMAL') {
     return 'ok'
   }
@@ -299,7 +671,7 @@ function applySummaryDateRange(summaries) {
 
 
 const energyCards = computed(() => {
-  const source = state.latestEnergy || latestSummary.value || {}
+  const source = liveEnergySource.value || {}
   return [
     ['전기 사용량', metricValue(source, 'electricityKwh', 'electricity_kwh'), 'kWh', 'electric'],
     ['가스 사용량', metricValue(source, 'gasM3', 'gas_m3'), 'm3', 'gas'],
@@ -315,13 +687,45 @@ const energyCards = computed(() => {
 
 const peakUsageRate = computed(() => {
   const peak = Number(
-    metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
+    metricValue(liveEnergySource.value, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
   )
   return peak ? Math.min(Math.round((peak / 1400) * 100), 999) : 0
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
-const peakMetrics = computed(() => state.peakDashboard?.metrics || {})
+const peakMetrics = computed(() => {
+  const metrics = state.peakDashboard?.metrics || {}
+  const live = selectedPlantLiveEnergy.value
+  if (!live) {
+    return metrics
+  }
+
+  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const thresholdKw = Number(metrics.thresholdKw || 1400)
+  const intervalPoints = peakTrendPoints.value
+  const currentIntervalAt = live.measuredAt
+  const recentCutoff = Date.parse(currentIntervalAt || '') - 15 * 60 * 1000
+  const recentRows = liveEnergyEntries.value.filter((row) => {
+    const measuredAt = Date.parse(row.measuredAt || '')
+    return Number(row.plantId) === Number(selectedPlantId.value) && measuredAt >= recentCutoff
+  })
+  const recentPeaks = recentRows.map((row) => metricNumber(row, 'peakKw', 'peak_kw')).filter((value) => value > 0)
+  const intervalAverageKw = recentPeaks.length
+    ? recentPeaks.reduce((sum, value) => sum + value, 0) / recentPeaks.length
+    : metrics.intervalAverageKw
+  const intervalMaxKw = recentPeaks.length
+    ? Math.max(...recentPeaks)
+    : metrics.intervalMaxKw
+  return {
+    ...metrics,
+    currentKw,
+    peakUsageRate: thresholdKw ? Math.min((currentKw / thresholdKw) * 100, 999) : 0,
+    intervalAverageKw,
+    intervalMaxKw,
+    intervalAt: currentIntervalAt || intervalPoints.at(-1)?.measuredAt || metrics.intervalAt,
+    measuredAt: live.measuredAt,
+  }
+})
 const peakTrend = computed(() => state.peakDashboard?.trend || [])
 const peakRanking = computed(() => state.peakDashboard?.facilityRanking || [])
 const peakHistory = computed(() => state.peakDashboard?.history || [])
@@ -354,17 +758,81 @@ const peakHistoryRows = computed(() =>
     peakUsageRate: row.peakUsageRate || row.peak_usage_rate,
     durationMinutes: row.durationMinutes || row.duration_minutes,
     thresholdKw: row.thresholdKw || row.threshold_kw,
-  })),
+  })).filter((row) => Number(row.peakUsageRate || 0) > 100),
 )
-const utilityMetrics = computed(() => state.utilityDashboard?.metrics || {})
+const utilityMetrics = computed(() => {
+  const metrics = state.utilityDashboard?.metrics || {}
+  if (!selectedUtilityDateIsToday.value) {
+    return metrics
+  }
+
+  const liveUsage = selectedPlantDailyLiveUsage.value
+  const gasUsageM3 = Math.max(Number(metrics.gasUsageM3 || metrics.gas_usage_m3 || 0), liveUsage.gasM3)
+  const waterUsageTon = Math.max(Number(metrics.waterUsageTon || metrics.water_usage_ton || 0), liveUsage.waterTon)
+  return {
+    ...metrics,
+    gasUsageM3,
+    gasTotalM3: Math.max(Number(metrics.gasTotalM3 || metrics.gas_total_m3 || 0), gasUsageM3),
+    waterUsageTon,
+    waterTotalTon: Math.max(Number(metrics.waterTotalTon || metrics.water_total_ton || 0), waterUsageTon),
+  }
+})
 const utilityHourlyUsage = computed(() =>
-  (state.utilityDashboard?.hourlyUsage || []).map((point) => ({
-    measuredAt: point.measuredAt || point.measured_at,
-    gasUsageM3: Number(point.gasUsageM3 || point.gas_usage_m3 || 0),
-    waterUsageTon: Number(point.waterUsageTon || point.water_usage_ton || 0),
-  })),
+  Array.from({ length: 24 }, (_, hour) => {
+    const measuredAt = `${selectedUtilityDate.value}T${String(hour).padStart(2, '0')}:00:00`
+    const source = (state.utilityDashboard?.hourlyUsage || []).find((point) => {
+      const value = point.measuredAt || point.measured_at
+      return formatDate(value) === selectedUtilityDate.value && Number(formatTime(value).slice(0, 2)) === hour
+    })
+    return {
+      measuredAt,
+      gasUsageM3: Number(source?.gasUsageM3 || source?.gas_usage_m3 || 0),
+      waterUsageTon: Number(source?.waterUsageTon || source?.water_usage_ton || 0),
+    }
+  }),
 )
-const utilityMeterStatuses = computed(() => state.utilityDashboard?.meterStatuses || [])
+const utilityMeterStatuses = computed(() =>
+  (state.utilityDashboard?.meterStatuses || [])
+    .filter((meter) => {
+      const facilityId = Number(meter.facilityId || meter.facility_id)
+      const sequence = facilityId % 10000
+      return (
+        facilityId >= 10000 &&
+        Math.floor(facilityId / 10000) === Number(selectedPlantId.value) &&
+        sequence >= 1 &&
+        sequence <= 24
+      )
+    })
+    .map((meter) => {
+      const facilityId = Number(meter.facilityId || meter.facility_id)
+      const meterType = meter.meterType || meter.meter_type
+      return {
+        ...meter,
+        facilityId,
+        facilityName: meter.facilityName || meter.facility_name,
+        meterType,
+        currentValue: metricNumber(meter, 'currentValue', 'current_value'),
+        lastReceivedAt: metricValue(meter, 'lastReceivedAt', 'last_received_at'),
+        communicationStatus: metricValue(meter, 'communicationStatus', 'communication_status'),
+        meterName: `${facilityCode({ facilityId })} ${meterTypeLabel(meterType)} 계측기`,
+      }
+    }),
+)
+const selectedUtilityDateIsToday = computed(() => selectedUtilityDate.value === formatDateInput(new Date()))
+const filteredUtilityMeterStatuses = computed(() => {
+  const keyword = utilityMeterSearch.value.trim().toLowerCase()
+  if (!keyword) {
+    return utilityMeterStatuses.value
+  }
+  return utilityMeterStatuses.value.filter((meter) =>
+    [
+      meter.meterName,
+      meter.facilityName,
+      meter.meterType,
+      meter.communicationStatus,
+    ].some((value) => String(value || '').toLowerCase().includes(keyword)),
+  )
+})
 const utilityPatterns = computed(() => {
   const patternsByDate = new Map(
     (state.utilityDashboard?.patterns || []).map((pattern) => [
@@ -396,6 +864,14 @@ const utilityPatterns = computed(() => {
 })
 const utilityGasMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.gasUsageM3)))
 const utilityWaterMax = computed(() => Math.max(1, ...utilityHourlyUsage.value.map((point) => point.waterUsageTon)))
+const utilityGasPoints = computed(() => utilityLinePoints(utilityHourlyUsage.value, 'gasUsageM3', utilityGasMax.value))
+const utilityWaterPoints = computed(() =>
+  utilityLinePoints(utilityHourlyUsage.value, 'waterUsageTon', utilityWaterMax.value),
+)
+const utilityGasLinePath = computed(() => utilityPath(utilityGasPoints.value))
+const utilityWaterLinePath = computed(() => utilityPath(utilityWaterPoints.value))
+const utilityGasAreaPath = computed(() => utilityAreaPath(utilityGasPoints.value))
+const utilityWaterAreaPath = computed(() => utilityAreaPath(utilityWaterPoints.value))
 const esgDashboard = computed(() => state.esgDashboard || {})
 const esgPlants = computed(() => esgDashboard.value.plants || [])
 const selectedEsgPlant = computed(
@@ -486,9 +962,33 @@ const esgMapPositions = [
   { left: 56, top: 74 },
 ]
 
+function buildScadaExternalUrl(userName) {
+  const url = new URL(SCADA_EXTERNAL_URL)
+  if (userName) {
+    url.searchParams.set('userName', userName)
+  }
+  return url.toString()
+}
+
+async function redirectToScada() {
+  let userName = state.me?.name
+
+  if (!userName && getAccessToken()) {
+    try {
+      const me = await api.me()
+      state.me = me
+      userName = me.name
+    } catch {
+      userName = ''
+    }
+  }
+
+  window.location.href = buildScadaExternalUrl(userName)
+}
+
 function routeTo(hash) {
   if (hash === '/scada') {
-    window.location.href = SCADA_EXTERNAL_URL
+    redirectToScada()
     return
   }
   if (window.location.hash === `#${hash}`) {
@@ -506,8 +1006,13 @@ function applyRoute() {
     return
   }
 
+  if (!getAccessToken()) {
+    routeTo('/login')
+    return
+  }
+
   if (route === '/scada') {
-    window.location.href = SCADA_EXTERNAL_URL
+    redirectToScada()
     return
   }
 
@@ -559,6 +1064,90 @@ function linePath(points, key, maxValue) {
     .join(' ')
 }
 
+function utilityLinePoints(points, key, maxValue) {
+  const width = 720
+  const height = 220
+  const paddingX = 26
+  const plotWidth = width - paddingX * 2
+  const gap = points.length <= 1 ? plotWidth : plotWidth / (points.length - 1)
+
+  return points.map((point, index) => {
+    const value = Number(point[key] || 0)
+    const ratio = Math.min(value / Math.max(maxValue, 1), 1)
+    return {
+      ...point,
+      chartValue: value,
+      x: Math.round(paddingX + index * gap),
+      y: Math.round(height - ratio * (height - 34) - 14),
+    }
+  })
+}
+
+function utilityPath(points) {
+  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+}
+
+function utilityAreaPath(points) {
+  if (!points.length) {
+    return ''
+  }
+  return `${utilityPath(points)} L ${points.at(-1).x} 220 L ${points[0].x} 220 Z`
+}
+
+function showUtilityTooltip(event, point, chart, label, unit) {
+  utilityTooltip.value = {
+    chart,
+    label,
+    time: formatTime(point.measuredAt),
+    value: formatNumber(point.chartValue),
+    unit,
+    x: 0,
+    y: 0,
+  }
+  moveUtilityTooltip(event)
+}
+
+function moveUtilityTooltip(event) {
+  if (!utilityTooltip.value) {
+    return
+  }
+  const chart = event.currentTarget.closest('.utility-line-chart')
+  const rect = chart?.getBoundingClientRect()
+  if (!rect) {
+    return
+  }
+  utilityTooltip.value = {
+    ...utilityTooltip.value,
+    x: Math.min(Math.max(event.clientX - rect.left + 14, 12), rect.width - 144),
+    y: Math.max(event.clientY - rect.top - 48, 10),
+  }
+}
+
+function hideUtilityTooltip() {
+  utilityTooltip.value = null
+}
+
+function facilitySequence(facility) {
+  const id = Number(facility?.facilityId ?? facility?.id)
+  if (!Number.isFinite(id)) {
+    return null
+  }
+  return id >= 10000 ? id % 10000 : id % 100
+}
+
+function facilityCode(facility) {
+  const sequence = facilitySequence(facility)
+  if (!sequence) {
+    return facility?.facilityName || facility?.name || '-'
+  }
+  return `F-${String(sequence).padStart(3, '0')}`
+}
+
+function facilityProcessName(facility) {
+  const sequence = facilitySequence(facility)
+  return equipmentProcessNames[sequence] || facility?.facilityName || facility?.name || selectedFacilityLineMeta.value.label
+}
+
 function statusLabel(status) {
   const labels = {
     ACTIVE: '활성',
@@ -580,7 +1169,14 @@ async function run(task) {
     await task()
   } catch (error) {
     errorMessage.value = error.message
-    if (error.status === 401 || error.message.includes('인증') || error.message.includes('Unauthorized')) {
+    if (
+      error.status === 401 ||
+      error.status === 403 ||
+      error.message.includes('인증') ||
+      error.message.includes('Unauthorized')
+    ) {
+      stopEnergyWebSocket()
+      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -605,6 +1201,7 @@ async function logout() {
       await api.logout()
     } finally {
       stopEnergyWebSocket()
+      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -613,12 +1210,30 @@ async function logout() {
 
 async function loadInitial() {
   await run(async () => {
-    const [me, plants] = await Promise.all([api.me(), api.plants()])
+    const [me, plantsResponse] = await Promise.all([api.me(), api.plants()])
+    const plants = Array.isArray(plantsResponse) ? plantsResponse : []
     state.me = me
     state.plants = plants
+
+    const currentPlant = plants.find((plant) => Number(plant.id) === Number(selectedPlantId.value))
+    const userPlant = plants.find((plant) => Number(plant.id) === Number(me.plantId))
+    const fallbackPlantId = me.role === 'ADMIN'
+      ? currentPlant?.id ?? plants[0]?.id ?? null
+      : userPlant?.id ?? plants[0]?.id ?? null
+
     syncingSelection.value = true
-    selectedPlantId.value = selectedPlantId.value || me.plantId || plants[0]?.id || null
+    selectedPlantId.value = me.role === 'ADMIN' ? fallbackPlantId : userPlant?.id ?? fallbackPlantId
     syncingSelection.value = false
+
+    if (!selectedPlantId.value) {
+      state.facilities = []
+      state.summaries = []
+      state.measurements = []
+      state.latestEnergy = null
+      state.facilityDetail = null
+      return
+    }
+
     if (appMode.value === 'detail' && activePage.value !== 'facility') {
       await loadActivePageData()
       return
@@ -640,14 +1255,18 @@ async function loadPlantData() {
   state.overview = overview
   state.facilities = facilities
   syncingSelection.value = true
-  selectedFacilityId.value = facilities[0]?.id || null
+  selectedFacilityId.value = null
   syncingSelection.value = false
 
   await loadActivePageData()
 }
 
 async function loadActivePageData() {
-  if (appMode.value === 'login' || !selectedPlantId.value) {
+  if (appMode.value === 'login') {
+    return
+  }
+
+  if (!selectedPlantId.value && activePage.value !== 'alarms') {
     return
   }
 
@@ -683,7 +1302,7 @@ async function loadActivePageData() {
   }
 
   if (activePage.value === 'alarms') {
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value, limit: 20 })
+    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
   }
 }
 
@@ -692,30 +1311,83 @@ async function loadEnergyData() {
     return
   }
 
+  selectedEnergyType.value = 'ELECTRICITY'
+  selectedDateFrom.value = selectedFacilityDate.value
+  selectedDateTo.value = selectedFacilityDate.value
+
   const summaryParams = {
     plantId: selectedPlantId.value,
-    facilityId: selectedFacilityId.value || undefined,
+    summaryType: 'DAILY',
+    from: `${selectedFacilityDate.value}T00:00:00`,
+    to: `${selectedFacilityDate.value}T23:59:59`,
   }
   const measurementParams = {
     plantId: selectedPlantId.value,
     facilityId: selectedFacilityId.value || undefined,
+    from: `${selectedFacilityDate.value}T00:00:00`,
+    to: `${selectedFacilityDate.value}T23:59:59`,
     limit: 20,
   }
 
-  const [summaries, measurements, latestEnergy] = await Promise.all([
+  const [summaries, measurements, latestEnergy, facilityLineUsages] = await Promise.all([
     api.energySummaries(summaryParams),
     api.energyMeasurements(measurementParams),
     selectedFacilityId.value
       ? api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
       : Promise.resolve(null),
+    api.energyFacilityLine({
+      plantId: selectedPlantId.value,
+      facilityType: selectedFacilityLine.value,
+      date: selectedFacilityDate.value,
+    }).catch(() => []),
   ])
 
   state.summaries = summaries
   state.measurements = measurements
-  state.latestEnergy = latestEnergy
-  applySummaryDateRange(summaries)
+  state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
+  state.facilityLineUsages = facilityLineUsages
+  if (selectedFacilityDateIsToday.value) {
+    await preloadFacilityLineLiveEnergy(facilityLineUsages)
+  }
   await loadFacilityDetail()
   startEnergyWebSocket()
+  startEnergyPolling()
+}
+
+async function preloadFacilityLineLiveEnergy(facilityLineUsages = []) {
+  if (!selectedPlantId.value || !facilityLineUsages.length) {
+    return
+  }
+
+  const facilityIds = new Set(facilityLineUsages.map((facility) => Number(facility.facilityId)))
+  const rows = await api.energyMeasurements({
+    plantId: selectedPlantId.value,
+    from: `${selectedFacilityDate.value}T00:00:00`,
+    to: `${selectedFacilityDate.value}T23:59:59`,
+    limit: 500,
+  }).catch(() => [])
+
+  const rowsByFacility = new Map()
+  rows
+    .map(normalizeEnergyMessage)
+    .filter((message) => message && facilityIds.has(Number(message.facilityId)))
+    .forEach((message) => {
+      const key = energyKey(message.plantId, message.facilityId)
+      const list = rowsByFacility.get(key) || []
+      list.push(message)
+      rowsByFacility.set(key, list)
+    })
+
+  facilityLineUsages.forEach((facility) => {
+    const key = energyKey(selectedPlantId.value, facility.facilityId)
+    const list = rowsByFacility.get(key) || []
+    const latest = list[0] || null
+    const baseline = list.at(-1) || latest
+    if (!liveEnergyBaselineByFacility.has(key) && baseline) {
+      liveEnergyBaselineByFacility.set(key, baseline)
+    }
+    rememberEnergyMessage(latest)
+  })
 }
 
 async function loadOverviewEnergyData() {
@@ -737,9 +1409,10 @@ async function loadOverviewEnergyData() {
 
   state.summaries = summaries
   state.measurements = []
-  state.latestEnergy = latestEnergy
+  state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   startEnergyWebSocket()
+  startEnergyPolling()
 }
 
 async function loadFacilityDetail() {
@@ -781,19 +1454,45 @@ async function loadUtilityDashboard() {
 }
 
 async function loadEsgDashboard() {
+  const range = monthRange(selectedEsgMonth.value)
+  selectedEsgFrom.value = range.from
+  selectedEsgTo.value = range.to
   state.esgDashboard = await api.esgEnvironmentDashboard({
     plantId: selectedPlantId.value || undefined,
-    ...dateRangeParams(selectedEsgFrom.value, selectedEsgTo.value),
+    ...dateRangeParams(range.from, range.to),
   })
 }
 
 async function loadLatestEnergy() {
-  if (!selectedPlantId.value || !selectedFacilityId.value || appMode.value === 'login') {
+  if (!selectedPlantId.value || appMode.value === 'login') {
     state.latestEnergy = null
     return
   }
 
-  state.latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+  if (selectedFacilityId.value) {
+    const latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value).catch(() => null)
+    state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
+    return
+  }
+
+  const rows = await api.energyMeasurements({
+    plantId: selectedPlantId.value,
+    from: `${formatDateInput(new Date())}T00:00:00`,
+    to: `${formatDateInput(new Date())}T23:59:59`,
+    limit: 500,
+  }).catch(() => [])
+  const seenFacilityIds = new Set()
+  rows
+    .map(normalizeEnergyMessage)
+    .filter((message) => message && isLineFacilityId(message.facilityId, selectedPlantId.value))
+    .forEach((message) => {
+      if (seenFacilityIds.has(message.facilityId)) {
+        return
+      }
+      seenFacilityIds.add(message.facilityId)
+      rememberEnergyMessage(message)
+    })
+  state.latestEnergy = selectedLiveEnergy.value || null
 }
 
 function energyWebSocketUrl() {
@@ -821,17 +1520,27 @@ function startEnergyWebSocket() {
       return
     }
 
-    const plantId = Number(metricValue(message, 'plantId', 'plant_id'))
-    const facilityId = Number(metricValue(message, 'facilityId', 'facility_id'))
+    const normalizedMessage = rememberEnergyMessage(message)
+    if (!normalizedMessage) {
+      return
+    }
 
-    if (plantId === Number(selectedPlantId.value) && facilityId === Number(selectedFacilityId.value)) {
-      state.latestEnergy = message
+    const plantId = Number(normalizedMessage.plantId)
+    const facilityId = Number(normalizedMessage.facilityId)
+
+    if (plantId === Number(selectedPlantId.value)) {
+      if (!selectedFacilityId.value || facilityId === Number(selectedFacilityId.value)) {
+        state.latestEnergy = selectedLiveEnergy.value || normalizedMessage
+      }
     }
     if (plantId === Number(selectedPlantId.value) && activePage.value === 'peak') {
       schedulePeakRefresh()
     }
     if (plantId === Number(selectedPlantId.value) && activePage.value === 'utility') {
       scheduleUtilityRefresh()
+    }
+    if (activePage.value === 'alarms' && (!selectedPlantId.value || plantId === Number(selectedPlantId.value))) {
+      scheduleAlarmRefresh()
     }
   }
 
@@ -859,6 +1568,31 @@ function stopEnergyWebSocket() {
   }
 }
 
+function startEnergyPolling() {
+  if (energyPollTimer || appMode.value === 'login') {
+    return
+  }
+
+  energyPollTimer = window.setInterval(async () => {
+    if (latestEnergyPollInFlight || appMode.value === 'login') {
+      return
+    }
+
+    latestEnergyPollInFlight = true
+    try {
+      await loadLatestEnergy()
+    } finally {
+      latestEnergyPollInFlight = false
+    }
+  }, LIVE_POLL_MS)
+}
+
+function stopEnergyPolling() {
+  window.clearInterval(energyPollTimer)
+  energyPollTimer = null
+  latestEnergyPollInFlight = false
+}
+
 async function refreshData() {
   if (appMode.value === 'detail' && activePage.value !== 'facility') {
     await run(loadActivePageData)
@@ -868,23 +1602,45 @@ async function refreshData() {
 }
 
 function schedulePeakRefresh() {
+  if (peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+    return
+  }
   window.clearTimeout(peakRefreshTimer)
   peakRefreshTimer = window.setTimeout(() => {
+    lastPeakRefreshAt = Date.now()
+    peakRefreshTimer = null
     loadPeakDashboard().catch(() => {})
-  }, 500)
+  }, 1000)
 }
 
 function scheduleUtilityRefresh() {
+  if (utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+    return
+  }
   window.clearTimeout(utilityRefreshTimer)
   utilityRefreshTimer = window.setTimeout(() => {
+    lastUtilityRefreshAt = Date.now()
+    utilityRefreshTimer = null
     loadUtilityDashboard().catch(() => {})
-  }, 500)
+  }, 1000)
+}
+
+function scheduleAlarmRefresh() {
+  if (Date.now() - lastAlarmRefreshAt < 5000) {
+    return
+  }
+  lastAlarmRefreshAt = Date.now()
+  api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    .then((alarms) => {
+      state.alarms = alarms
+    })
+    .catch(() => {})
 }
 
 async function resolveAlarm(alarmId) {
   await run(async () => {
     await api.resolveAlarm(alarmId)
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value, limit: 20 })
+    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
   })
 }
 
@@ -894,6 +1650,29 @@ function goScada() {
 
 function goDetail(page = 'facility') {
   routeTo(`/detail/${page}`)
+}
+
+function selectFacilityCard(facilityId) {
+  selectedFacilityId.value = facilityId
+}
+
+function canAccessPlant(plantId) {
+  if (!plantId) {
+    return canViewAllPlants.value
+  }
+  return isAdminUser.value || !assignedPlantId.value || Number(plantId) === Number(assignedPlantId.value)
+}
+
+function enforcePlantAccess(plantId) {
+  if (canAccessPlant(plantId)) {
+    return true
+  }
+
+  errorMessage.value = '해당 사업장에 대한 권한이 없습니다.'
+  syncingSelection.value = true
+  selectedPlantId.value = assignedPlantId.value
+  syncingSelection.value = false
+  return false
 }
 
 function dateRangeParams(from, to) {
@@ -908,6 +1687,13 @@ function dateRangeParams(from, to) {
 
 watch(selectedPlantId, () => {
   if (appMode.value !== 'login' && !syncingSelection.value) {
+    if (!enforcePlantAccess(selectedPlantId.value)) {
+      return
+    }
+    if (!selectedPlantId.value && activePage.value === 'alarms') {
+      run(loadActivePageData)
+      return
+    }
     if (activePage.value === 'esg') {
       if (!esgPlants.value.length) {
         run(loadEsgDashboard)
@@ -934,13 +1720,15 @@ watch(selectedFacilityId, () => {
   }
 })
 
-watch(selectedEnergyType, () => {
+watch([selectedFacilityLine, selectedFacilityDate], () => {
   if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
-    run(loadFacilityDetail)
+    selectedFacilityId.value = null
+    state.facilityDetail = null
+    run(loadEnergyData)
   }
 })
 
-watch([selectedDateFrom, selectedDateTo], () => {
+watch(selectedEnergyType, () => {
   if (appMode.value !== 'login' && activePage.value === 'facility' && !syncingSelection.value) {
     run(loadFacilityDetail)
   }
@@ -958,6 +1746,12 @@ watch(selectedUtilityDate, () => {
   }
 })
 
+watch(selectedEsgMonth, () => {
+  if (appMode.value !== 'login' && activePage.value === 'esg' && !syncingSelection.value) {
+    run(loadEsgDashboard)
+  }
+})
+
 onMounted(() => {
   applyRoute()
   window.addEventListener('hashchange', applyRoute)
@@ -969,6 +1763,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
+  stopEnergyPolling()
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
   window.removeEventListener('hashchange', applyRoute)
@@ -981,7 +1776,7 @@ onUnmounted(() => {
     <section class="login-page">
       <article class="login-visual">
         <p>Smart Factory SCADA</p>
-        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다</h2>
+        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다.</h2>
         <div class="login-lines"></div>
       </article>
       <form class="login-card" @submit.prevent="login">
@@ -1038,7 +1833,7 @@ onUnmounted(() => {
       <article v-for="card in energyCards" :key="card.label" :class="['scada-energy-card', card.tone]">
         <span>{{ card.label }}</span>
         <strong>{{ card.value }} <small>{{ card.unit }}</small></strong>
-        <p>{{ state.latestEnergy ? `실시간 수신 ${formatDateTime(latestMeasuredAt).slice(11)}` : 'DB 요약값' }}</p>
+        <p>{{ liveEnergyFresh ? `실시간 수신 ${formatDateTime(latestMeasuredAt).slice(11)}` : 'DB 요약값' }}</p>
       </article>
     </section>
 
@@ -1046,7 +1841,7 @@ onUnmounted(() => {
       <article class="scada-panel wide">
         <div class="panel-title inline">
           <h2>최근 에너지 요약 추이</h2>
-          <span class="live-pill">{{ state.latestEnergy ? '현재값 반영' : 'API 연동' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '현재값 반영' : 'API 연동' }}</span>
         </div>
         <div class="summary-chart">
           <div
@@ -1073,7 +1868,7 @@ onUnmounted(() => {
             <span>
               {{
                 formatNumber(
-                  metricValue(state.latestEnergy, 'peakKw', 'peak_kw') ??
+                  metricValue(liveEnergySource, 'peakKw', 'peak_kw') ??
                     metricValue(latestSummary, 'peakKw', 'peak_kw'),
                 )
               }}
@@ -1161,140 +1956,131 @@ onUnmounted(() => {
         <label>
           사업장
           <select v-model.number="selectedPlantId">
+            <option v-if="activePage === 'alarms' && canViewAllPlants" :value="null">전체 사업장</option>
             <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          설비
-          <select v-model.number="selectedFacilityId">
-            <option :value="null">전체 설비</option>
-            <option v-for="facility in state.facilities" :key="facility.id" :value="facility.id">
-              {{ facility.name }}
+        <label v-if="activePage === 'facility'">
+          설비 라인
+          <select v-model="selectedFacilityLine">
+            <option v-for="line in facilityLineOptions" :key="line.value" :value="line.value">
+              {{ line.label }}
             </option>
           </select>
         </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          에너지 종류
-          <select v-model="selectedEnergyType">
-            <option v-for="option in energyTypeOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          시작일
-          <input v-model="selectedDateFrom" type="date" />
-        </label>
-        <label v-if="!['peak', 'utility'].includes(activePage)">
-          종료일
-          <input v-model="selectedDateTo" type="date" />
+        <label v-if="activePage === 'facility'">
+          조회일
+          <input v-model="selectedFacilityDate" type="date" />
         </label>
       </section>
 
       <p v-if="errorMessage" class="api-error">{{ errorMessage }}</p>
 
-      <section v-if="activePage === 'facility'" class="page-stack">
-        <section class="facility-status-layout">
-          <article class="panel facility-chart-panel">
+      <section v-if="activePage === 'facility'" class="page-stack facility-monitor-page">
+        <section class="facility-status-layout facility-card-layout">
+          <article class="panel facility-chart-panel facility-equipment-panel">
             <div class="panel-title inline">
-              <h2>설비 사용량 추이 <small>({{ selectedEnergyMeta.label }})</small></h2>
-              <span class="live-pill">{{ state.facilityDetail ? '상세 API 연동' : '데이터 대기' }}</span>
+              <h2>설비 사용량 추이 <small>({{ selectedFacilityLineMeta.label }} / 전기)</small></h2>
+              <span class="live-pill">{{ selectedFacilityDateIsToday && liveEnergyFresh ? '실시간 반영' : '일별 데이터' }}</span>
             </div>
-            <div class="facility-bar-chart" :class="selectedEnergyMeta.tone">
-              <div v-for="point in facilityDetailChart" :key="point.date" class="facility-bar">
-                <b>{{ formatNumber(point.usage, 0) }}</b>
-                <i :style="{ height: `${facilityBarHeight(point)}%` }"></i>
-                <span>{{ formatChartDate(point.date) }}</span>
-              </div>
+            <div class="facility-equipment-grid">
+              <button
+                v-for="facility in facilityEquipmentCards"
+                :key="facility.facilityId"
+                type="button"
+                :class="['facility-equipment-card', { active: Number(selectedFacilityId) === Number(facility.facilityId) }]"
+                @click="selectFacilityCard(facility.facilityId)"
+              >
+                <span class="facility-equipment-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="equipmentIconPath"></path>
+                  </svg>
+                </span>
+                <strong>{{ facilityCode(facility) }}</strong>
+                <small>{{ facilityProcessName(facility) }}</small>
+                <b>{{ formatNumber(facility.todayUsageKwh, 0) }} <em>kWh</em></b>
+                <i :class="trendClass(facility.todayVsMonthlyAverageRate)">
+                  월 평균 {{ trendPrefix(facility.todayVsMonthlyAverageRate) }}{{ formatNumber(facility.todayVsMonthlyAverageRate) }}%
+                </i>
+                <span class="facility-month-average">월 평균 {{ formatNumber(facility.monthlyAverageKwh, 0) }} kWh</span>
+              </button>
+              <article v-if="!facilityEquipmentCards.length" class="facility-empty-card">
+                선택한 라인에 표시할 설비 데이터가 없습니다.
+              </article>
             </div>
           </article>
 
           <aside class="panel facility-detail-card" :class="selectedEnergyMeta.tone">
-            <div class="facility-card-head">
+            <template v-if="selectedFacilityUsage">
+              <div class="facility-card-head">
+                <span class="facility-device-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="equipmentIconPath"></path>
+                  </svg>
+                </span>
+                <div>
+                  <h2>{{ facilityCode(selectedFacilityUsage) }}</h2>
+                  <p>{{ facilityProcessName(selectedFacilityUsage) }}</p>
+                </div>
+                <em v-if="selectedFacilityDateIsToday" :class="{ warn: selectedFacilityUsage.facilityStatus !== 'RUNNING' }">
+                  {{ statusLabel(selectedFacilityUsage.facilityStatus) }}
+                </em>
+              </div>
+
+              <div class="facility-stat-list">
+                <article>
+                  <span class="round-icon energy">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="selectedEnergyMeta.iconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>금일 사용량</p>
+                    <strong>{{ formatNumber(facilityTodayUsage, 0) }} <small>kWh</small></strong>
+                  </div>
+                </article>
+                <article>
+                  <span class="round-icon trend">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="trendIconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>전일 사용량</p>
+                    <strong>{{ formatNumber(selectedFacilityUsage.yesterdayUsageKwh, 0) }} <small>kWh</small></strong>
+                    <small :class="trendClass(selectedFacilityUsage.todayVsYesterdayRate)">
+                      전일 대비 {{ trendPrefix(selectedFacilityUsage.todayVsYesterdayRate) }}{{ formatNumber(selectedFacilityUsage.todayVsYesterdayRate) }}%
+                    </small>
+                  </div>
+                </article>
+                <article>
+                  <span class="round-icon storage">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path :d="storageIconPath"></path>
+                    </svg>
+                  </span>
+                  <div>
+                    <p>월 평균 사용량</p>
+                    <strong>{{ formatNumber(selectedFacilityUsage.monthlyAverageKwh, 0) }} <small>kWh</small></strong>
+                    <small :class="trendClass(selectedFacilityUsage.todayVsMonthlyAverageRate)">
+                      월 평균 대비 {{ trendPrefix(selectedFacilityUsage.todayVsMonthlyAverageRate) }}{{ formatNumber(selectedFacilityUsage.todayVsMonthlyAverageRate) }}%
+                    </small>
+                  </div>
+                </article>
+              </div>
+            </template>
+            <div v-else class="facility-detail-empty">
               <span class="facility-device-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path :d="equipmentIconPath"></path>
                 </svg>
               </span>
-              <div>
-                <h2>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</h2>
-                <p>{{ state.facilityDetail?.facilityType || selectedFacility?.facilityType || '-' }}</p>
-              </div>
-              <em :class="{ warn: state.facilityDetail?.facilityStatus !== 'RUNNING' }">
-                {{ statusLabel(state.facilityDetail?.facilityStatus || selectedFacility?.status) }}
-              </em>
-            </div>
-
-            <div class="facility-stat-list">
-              <article>
-                <span class="round-icon energy">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="selectedEnergyMeta.iconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>금일 사용량</p>
-                  <strong>{{ formatNumber(facilityTodayUsage) }} <small>{{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small></strong>
-                </div>
-              </article>
-              <article>
-                <span class="round-icon trend">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="trendIconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>전일 대비</p>
-                  <strong :class="trendClass(facilityChangeRate)">
-                    {{ trendPrefix(facilityChangeRate) }}{{ formatNumber(facilityChangeRate) }}<small>%</small>
-                  </strong>
-                  <small>{{ trendPrefix(facilityChangeAmount) }}{{ formatNumber(facilityChangeAmount) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</small>
-                </div>
-              </article>
-              <article>
-                <span class="round-icon storage">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path :d="storageIconPath"></path>
-                  </svg>
-                </span>
-                <div>
-                  <p>데이터 수집 상태</p>
-                  <strong>정상</strong>
-                  <small>최근 수집 {{ formatDateTime(state.facilityDetail?.latestMeasuredAt) }}</small>
-                </div>
-              </article>
+              <strong>설비를 선택하세요</strong>
+              <p>왼쪽 설비 카드 중 하나를 클릭하면 설비 정보가 표시됩니다.</p>
             </div>
           </aside>
         </section>
-
-        <article class="panel table-panel facility-log-panel">
-          <div class="panel-title inline">
-            <h2>사용 로그</h2>
-            <span>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '전체 설비' }}</span>
-          </div>
-          <table>
-            <thead>
-              <tr><th>일자</th><th>설비</th><th>에너지 종류</th><th>사용량</th><th>전일 대비</th><th>증감률</th><th>수집 시간</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in facilityDetailLogs" :key="row.measuredAt">
-                <td>{{ formatDate(row.measuredAt) }}</td>
-                <td>{{ state.facilityDetail?.facilityName || selectedFacility?.name || '-' }}</td>
-                <td>{{ selectedEnergyMeta.label }}</td>
-                <td>{{ formatNumber(row.usage) }} {{ state.facilityDetail?.unit || selectedEnergyMeta.unit }}</td>
-                <td :class="trendClass(row.changeAmount)">
-                  {{ trendPrefix(row.changeAmount) }}{{ formatNumber(row.changeAmount) }}
-                </td>
-                <td :class="trendClass(row.changeRate)">
-                  {{ trendPrefix(row.changeRate) }}{{ formatNumber(row.changeRate) }}%
-                </td>
-                <td>{{ formatDateTime(row.measuredAt) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </article>
       </section>
-
       <section v-else-if="activePage === 'peak'" class="page-stack peak-monitor-page">
         <section class="peak-filter-row">
           <label>
@@ -1304,7 +2090,7 @@ onUnmounted(() => {
           <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
         </section>
 
         <section class="peak-kpi-grid">
@@ -1337,7 +2123,7 @@ onUnmounted(() => {
             <div>
               <p>15분 최대 전력</p>
               <b>{{ formatNumber(peakMetrics.intervalMaxKw) }}<small> kW</small></b>
-              <em>금일 집계 기준</em>
+              <em>전날 평균 대비 {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
             </div>
           </article>
         </section>
@@ -1410,7 +2196,7 @@ onUnmounted(() => {
 
         <article class="panel table-panel peak-history-panel">
           <div class="panel-title inline">
-            <h2>피크 이력</h2>
+            <h2>피크 발생 이력</h2>
             <History :size="20" />
           </div>
           <table>
@@ -1436,7 +2222,7 @@ onUnmounted(() => {
                 <td>{{ row.exceeded ? '피크 초과' : '-' }}</td>
               </tr>
               <tr v-if="!peakHistoryRows.length">
-                <td colspan="7">조회된 피크 이력이 없습니다.</td>
+                <td colspan="7">조회일에 피크 발생 이력이 없습니다.</td>
               </tr>
             </tbody>
           </table>
@@ -1452,7 +2238,7 @@ onUnmounted(() => {
           <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ state.latestEnergy ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
         </section>
 
         <section class="utility-kpi-grid">
@@ -1471,7 +2257,7 @@ onUnmounted(() => {
             <div>
               <p>가스 적산량</p>
               <b>{{ formatNumber(utilityMetrics.gasTotalM3) }}<small> m3</small></b>
-              <em>최신 누적 계량값</em>
+              <em>이번 달 누적 사용량</em>
             </div>
           </article>
           <article class="utility-kpi-card water">
@@ -1489,7 +2275,7 @@ onUnmounted(() => {
             <div>
               <p>용수 적산량</p>
               <b>{{ formatNumber(utilityMetrics.waterTotalTon) }}<small> ton</small></b>
-              <em>최신 누적 계량값</em>
+              <em>이번 달 누적 사용량</em>
             </div>
           </article>
         </section>
@@ -1500,11 +2286,43 @@ onUnmounted(() => {
               <h2>가스 시간대별 사용량</h2>
               <span>단위: m3</span>
             </div>
-            <div class="utility-bar-chart">
-              <div v-for="point in utilityHourlyUsage" :key="`gas-${point.measuredAt}`" class="utility-bar">
-                <b>{{ formatNumber(point.gasUsageM3) }}</b>
-                <i :style="{ height: `${utilityBarHeight(point.gasUsageM3, utilityGasMax)}%` }"></i>
-                <span>{{ formatTime(point.measuredAt) }}</span>
+            <div class="utility-line-chart gas">
+              <svg viewBox="0 0 720 260" role="img" aria-label="가스 시간대별 사용량">
+                <defs>
+                  <linearGradient id="gasLineFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#f97316" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#f97316" stop-opacity="0.03" />
+                  </linearGradient>
+                </defs>
+                <g class="utility-grid-lines">
+                  <line v-for="row in 5" :key="`gas-grid-${row}`" x1="26" x2="694" :y1="row * 40" :y2="row * 40" />
+                </g>
+                <path class="utility-area gas" :d="utilityGasAreaPath" />
+                <path class="utility-line gas" :d="utilityGasLinePath" />
+                <g
+                  v-for="point in utilityGasPoints"
+                  :key="`gas-point-${point.measuredAt}`"
+                  @mouseenter="showUtilityTooltip($event, point, 'gas', '가스 사용량', 'm3')"
+                  @mousemove="moveUtilityTooltip"
+                  @mouseleave="hideUtilityTooltip"
+                >
+                  <circle class="utility-dot gas" :cx="point.x" :cy="point.y" r="4"></circle>
+                </g>
+                <g class="utility-x-axis">
+                  <template v-for="(point, index) in utilityGasPoints" :key="`gas-axis-${point.measuredAt}`">
+                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
+                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    </text>
+                  </template>
+                </g>
+              </svg>
+              <div
+                v-if="utilityTooltip?.chart === 'gas'"
+                class="utility-chart-tooltip"
+                :style="{ left: `${utilityTooltip.x}px`, top: `${utilityTooltip.y}px` }"
+              >
+                <b>{{ utilityTooltip.label }}</b>
+                <span>{{ utilityTooltip.time }} · {{ utilityTooltip.value }} {{ utilityTooltip.unit }}</span>
               </div>
             </div>
           </article>
@@ -1514,11 +2332,43 @@ onUnmounted(() => {
               <h2>용수 시간대별 사용량</h2>
               <span>단위: ton</span>
             </div>
-            <div class="utility-bar-chart">
-              <div v-for="point in utilityHourlyUsage" :key="`water-${point.measuredAt}`" class="utility-bar">
-                <b>{{ formatNumber(point.waterUsageTon) }}</b>
-                <i :style="{ height: `${utilityBarHeight(point.waterUsageTon, utilityWaterMax)}%` }"></i>
-                <span>{{ formatTime(point.measuredAt) }}</span>
+            <div class="utility-line-chart water">
+              <svg viewBox="0 0 720 260" role="img" aria-label="용수 시간대별 사용량">
+                <defs>
+                  <linearGradient id="waterLineFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.03" />
+                  </linearGradient>
+                </defs>
+                <g class="utility-grid-lines">
+                  <line v-for="row in 5" :key="`water-grid-${row}`" x1="26" x2="694" :y1="row * 40" :y2="row * 40" />
+                </g>
+                <path class="utility-area water" :d="utilityWaterAreaPath" />
+                <path class="utility-line water" :d="utilityWaterLinePath" />
+                <g
+                  v-for="point in utilityWaterPoints"
+                  :key="`water-point-${point.measuredAt}`"
+                  @mouseenter="showUtilityTooltip($event, point, 'water', '용수 사용량', 'ton')"
+                  @mousemove="moveUtilityTooltip"
+                  @mouseleave="hideUtilityTooltip"
+                >
+                  <circle class="utility-dot water" :cx="point.x" :cy="point.y" r="4"></circle>
+                </g>
+                <g class="utility-x-axis">
+                  <template v-for="(point, index) in utilityWaterPoints" :key="`water-axis-${point.measuredAt}`">
+                    <text v-if="index % 2 === 0 || index === 23" :x="point.x" y="246">
+                      {{ formatTime(point.measuredAt).slice(0, 2) }}시
+                    </text>
+                  </template>
+                </g>
+              </svg>
+              <div
+                v-if="utilityTooltip?.chart === 'water'"
+                class="utility-chart-tooltip"
+                :style="{ left: `${utilityTooltip.x}px`, top: `${utilityTooltip.y}px` }"
+              >
+                <b>{{ utilityTooltip.label }}</b>
+                <span>{{ utilityTooltip.time }} · {{ utilityTooltip.value }} {{ utilityTooltip.unit }}</span>
               </div>
             </div>
           </article>
@@ -1527,37 +2377,46 @@ onUnmounted(() => {
         <section class="utility-bottom-grid">
           <article class="panel table-panel utility-meter-panel">
             <div class="panel-title inline">
-              <h2>계측기별 상태 조회</h2>
+              <h2>계측기 상태 조회</h2>
               <RadioReceiver :size="20" />
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>계측기명</th>
-                  <th>구분</th>
-                  <th>현재값</th>
-                  <th>단위</th>
-                  <th>최근 수신</th>
-                  <th>통신 상태</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="meter in utilityMeterStatuses" :key="`${meter.meterType}-${meter.facilityId}`">
-                  <td>{{ meter.meterName || meter.facilityName }}</td>
-                  <td :class="meter.meterType === 'GAS' ? 'utility-gas-text' : 'utility-water-text'">
-                    {{ meterTypeLabel(meter.meterType) }}
-                  </td>
-                  <td>{{ formatNumber(meter.currentValue) }}</td>
-                  <td>{{ meter.unit }}</td>
-                  <td>{{ formatDateTime(meter.lastReceivedAt) }}</td>
-                  <td>
-                    <span :class="['badge', meterStatusClass(meter.communicationStatus)]">
-                      {{ meterStatusLabel(meter.communicationStatus) }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <div class="utility-meter-toolbar">
+              <input v-model="utilityMeterSearch" type="search" placeholder="계측기명, 설비명, 상태 검색" />
+              <span>{{ filteredUtilityMeterStatuses.length }} / {{ utilityMeterStatuses.length }}</span>
+            </div>
+            <div class="utility-meter-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>계측기명</th>
+                    <th>구분</th>
+                    <th>현재값</th>
+                    <th>단위</th>
+                    <th>최근 수신</th>
+                    <th>통신 상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="meter in filteredUtilityMeterStatuses" :key="`${meter.meterType}-${meter.facilityId}`">
+                    <td>{{ meter.meterName || meter.facilityName }}</td>
+                    <td :class="meter.meterType === 'GAS' ? 'utility-gas-text' : 'utility-water-text'">
+                      {{ meterTypeLabel(meter.meterType) }}
+                    </td>
+                    <td>{{ formatNumber(meter.currentValue) }}</td>
+                    <td>{{ meter.unit }}</td>
+                    <td>{{ formatDateTime(meter.lastReceivedAt) }}</td>
+                    <td>
+                      <span :class="['badge', meterStatusClass(meter.communicationStatus)]">
+                        {{ meterStatusLabel(meter.communicationStatus) }}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr v-if="!filteredUtilityMeterStatuses.length">
+                    <td colspan="6">검색 결과가 없습니다.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </article>
 
           <article class="panel utility-pattern-panel">
@@ -1605,17 +2464,13 @@ onUnmounted(() => {
             </select>
           </label>
           <label>
-            시작일
-            <input v-model="selectedEsgFrom" type="date" />
-          </label>
-          <label>
-            종료일
-            <input v-model="selectedEsgTo" type="date" />
+            조회월
+            <input v-model="selectedEsgMonth" type="month" />
           </label>
           <button class="primary-button compact" type="button" @click="run(loadEsgDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">내부 환경 점수 0-10</span>
+          <span class="live-pill">월간 환경 점수 0-10</span>
         </section>
 
         <section class="esg-kpi-grid">
@@ -1689,7 +2544,7 @@ onUnmounted(() => {
         <section class="esg-bottom-grid">
           <article class="panel esg-compare-panel">
             <div class="panel-title inline">
-              <h2>핵심 환경 항목 비교</h2>
+              <h2>통합 환경 항목 비교</h2>
               <span>0-10 점수</span>
             </div>
             <div class="esg-grouped-chart">
@@ -1725,37 +2580,6 @@ onUnmounted(() => {
                 <b>{{ formatNumber(metric.value) }} {{ metric.unit }}</b>
                 <em>{{ formatNumber(metric.score) }}/10</em>
               </article>
-            </div>
-          </article>
-        </section>
-
-        <section class="esg-bottom-grid">
-          <article class="panel esg-alert-panel">
-            <div class="panel-title inline">
-              <h2>운영 알림</h2>
-              <AlertTriangle :size="20" />
-            </div>
-            <div class="esg-alert-list">
-              <article v-for="alert in esgAlerts" :key="`${alert.plantId}-${alert.title}`" :class="alert.level">
-                <b>{{ alert.title }}</b>
-                <span>{{ alert.plantName }} · {{ alert.message }}</span>
-              </article>
-              <article v-if="!esgAlerts.length" class="ok">
-                <b>특이 알림 없음</b>
-                <span>급증, 피크 초과, 데이터 누락 조건이 감지되지 않았습니다.</span>
-              </article>
-            </div>
-          </article>
-
-          <article class="panel esg-logic-panel">
-            <div class="panel-title inline">
-              <h2>등급 산정 로직</h2>
-              <span>내부 기준</span>
-            </div>
-            <div class="esg-logic-list">
-              <p>{{ esgLogic.normalization }}</p>
-              <p>{{ esgLogic.weight }}</p>
-              <p>{{ esgLogic.gradeMapping }}</p>
             </div>
           </article>
         </section>
@@ -1804,3 +2628,4 @@ onUnmounted(() => {
     </section>
   </main>
 </template>
+
