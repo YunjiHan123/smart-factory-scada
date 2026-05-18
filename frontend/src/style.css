@@ -916,6 +916,23 @@ td {
   gap: 8px;
 }
 
+.peak-period-control {
+  display: grid;
+  gap: 8px;
+  color: #1c2a44;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.peak-period-control .segmented {
+  min-height: 42px;
+}
+
+.peak-period-control .segmented button {
+  min-width: 54px;
+  height: 42px;
+}
+
 .peak-kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -994,6 +1011,154 @@ td {
   font-size: 12px;
   font-style: normal;
   font-weight: 800;
+}
+
+.peak-view-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.peak-view-tabs button {
+  min-height: 38px;
+  padding: 0 16px;
+  color: #334a73;
+  font-weight: 900;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.peak-view-tabs button.active,
+.peak-view-tabs button:hover {
+  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.peak-comparison-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 14px;
+}
+
+.peak-comparison-panel,
+.peak-selected-plant-panel {
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.peak-comparison-panel .panel-title span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.peak-plant-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.peak-plant-bars button {
+  display: grid;
+  grid-template-columns: 34px minmax(130px, 0.8fr) minmax(160px, 1fr) 104px 64px;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 12px;
+  color: #1f355f;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.peak-plant-bars button.active,
+.peak-plant-bars button:hover {
+  border-color: #9ec5ff;
+  background: #f0f7ff;
+}
+
+.peak-plant-bars button.danger {
+  border-color: #fecaca;
+}
+
+.peak-plant-bars b {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: #fff;
+  border-radius: 50%;
+  background: var(--blue);
+}
+
+.peak-plant-bars span,
+.peak-plant-bars strong,
+.peak-plant-bars small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peak-plant-bars span {
+  color: #0b1633;
+  font-weight: 900;
+}
+
+.peak-plant-bars i {
+  display: block;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef7;
+}
+
+.peak-plant-bars i em {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue), var(--cyan));
+}
+
+.peak-plant-bars button.danger i em {
+  background: linear-gradient(90deg, var(--orange), var(--red));
+}
+
+.peak-plant-bars strong,
+.peak-plant-bars small {
+  color: #334a73;
+  font-weight: 900;
+  text-align: right;
+}
+
+.peak-selected-summary {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.peak-selected-summary strong {
+  color: #0b1633;
+  font-size: 20px;
+}
+
+.peak-selected-summary b {
+  color: #0b1633;
+  font-size: 36px;
+  line-height: 1;
+}
+
+.peak-selected-summary b small {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.peak-selected-summary span,
+.peak-selected-summary em {
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .peak-content-grid {
@@ -1197,6 +1362,23 @@ td {
   gap: 8px;
 }
 
+.utility-period-control {
+  display: grid;
+  gap: 8px;
+  color: #1c2a44;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.utility-period-control .segmented {
+  min-height: 42px;
+}
+
+.utility-period-control .segmented button {
+  min-width: 54px;
+  height: 42px;
+}
+
 .utility-kpi-grid,
 .utility-chart-grid,
 .utility-bottom-grid {
@@ -1211,6 +1393,166 @@ td {
 .utility-chart-grid,
 .utility-bottom-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.utility-view-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.utility-view-tabs button {
+  min-height: 38px;
+  padding: 0 16px;
+  color: #334a73;
+  font-weight: 900;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.utility-view-tabs button.active,
+.utility-view-tabs button:hover {
+  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.utility-comparison-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 14px;
+}
+
+.utility-comparison-panel,
+.utility-selected-plant-panel {
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.utility-comparison-panel .panel-title span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.utility-plant-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.utility-plant-bars button {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) repeat(2, minmax(180px, 1fr));
+  align-items: center;
+  gap: 12px;
+  min-height: 66px;
+  padding: 10px 12px;
+  color: #1f355f;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.utility-plant-bars button.active,
+.utility-plant-bars button:hover {
+  border-color: #9ec5ff;
+  background: #f0f7ff;
+}
+
+.utility-plant-bars span,
+.utility-plant-bars strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.utility-plant-bars span {
+  color: #0b1633;
+  font-weight: 900;
+}
+
+.utility-plant-bars div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.utility-plant-bars i {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef7;
+}
+
+.utility-plant-bars i em {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.utility-plant-bars i.gas em {
+  background: linear-gradient(90deg, #ffbd66, var(--orange));
+}
+
+.utility-plant-bars i.water em {
+  background: linear-gradient(90deg, #55e7ff, var(--cyan));
+}
+
+.utility-plant-bars strong {
+  color: #334a73;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.utility-selected-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.utility-selected-summary > strong {
+  color: #0b1633;
+  font-size: 20px;
+}
+
+.utility-selected-summary article {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.utility-selected-summary span,
+.utility-selected-summary em {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.utility-selected-summary .gas {
+  color: var(--orange);
+}
+
+.utility-selected-summary .water {
+  color: var(--cyan);
+}
+
+.utility-selected-summary b {
+  color: #0b1633;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.utility-selected-summary b small {
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .utility-kpi-card {
@@ -3348,6 +3690,8 @@ td {
   .facility-status-layout,
   .peak-kpi-grid,
   .peak-content-grid,
+  .peak-comparison-grid,
+  .utility-comparison-grid,
   .utility-kpi-grid,
   .utility-chart-grid,
   .utility-bottom-grid,
@@ -3365,6 +3709,19 @@ td {
   .esg-filter-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .peak-plant-bars button {
+    grid-template-columns: 34px minmax(0, 1fr) 92px;
+  }
+
+  .peak-plant-bars i,
+  .peak-plant-bars small {
+    grid-column: 2 / -1;
+  }
+
+  .utility-plant-bars button {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -13,7 +13,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.smartfactory.scada.energy.domain.EnergyType;
+import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.domain.UtilityUsagePeriod;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
@@ -80,17 +82,19 @@ public class EnergyMeasurementController {
 	@GetMapping("/peak-dashboard")
 	public PeakPowerDashboardResponse getPeakDashboard(
 		@RequestParam Long plantId,
-		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+		@RequestParam(required = false) PeakPowerPeriod period
 	) {
-		return energyService.getPeakDashboard(plantId, date);
+		return energyService.getPeakDashboard(plantId, date, period);
 	}
 
 	@GetMapping("/utility-dashboard")
 	public UtilityUsageDashboardResponse getUtilityDashboard(
 		@RequestParam Long plantId,
-		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+		@RequestParam(required = false) UtilityUsagePeriod period
 	) {
-		return energyService.getUtilityDashboard(plantId, date);
+		return energyService.getUtilityDashboard(plantId, date, period);
 	}
 
 	@GetMapping("/latest/plants/{plantId}/facilities/{facilityId}")
