@@ -2,10 +2,12 @@ package com.smartfactory.scada.energy.service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.LocalTime;
+import java.time.temporal.TemporalAdjusters;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +28,7 @@ import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.EnergyType;
+import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsageLogResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse.EnergyUsagePointResponse;
@@ -37,6 +40,7 @@ import com.smartfactory.scada.energy.dto.PeakPowerDashboardResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
 import com.smartfactory.scada.energy.dto.PeakPowerMetricResponse;
+import com.smartfactory.scada.energy.dto.PeakPowerPlantComparison;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
@@ -125,21 +129,24 @@ public class EnergyService {
 	}
 
 	@Transactional(readOnly = true)
-	public PeakPowerDashboardResponse getPeakDashboard(Long plantId, LocalDate targetDate) {
+	public PeakPowerDashboardResponse getPeakDashboard(Long plantId, LocalDate targetDate, PeakPowerPeriod period) {
 		if (plantId == null) {
 			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
 		}
 
 		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
-		LocalDateTime from = resolvedDate.atStartOfDay();
-		LocalDateTime to = resolvedDate.plusDays(1).atStartOfDay();
+		PeakPowerPeriodRange periodRange = resolvePeakPowerPeriodRange(resolvedDate, period);
+		PeakPowerPeriodRange previousPeriodRange = previousPeakPowerPeriodRange(periodRange);
+		LocalDateTime from = periodRange.from().atStartOfDay();
+		LocalDateTime to = periodRange.to().atStartOfDay();
 		BigDecimal thresholdKw = peakThresholdForPlant(plantId);
 
-		List<PeakPowerTrendPoint> trend = energyMapper.findPeakPowerTrend(plantId, from, to);
-		List<PeakPowerTrendPoint> previousDayTrend = energyMapper.findPeakPowerTrend(
+		List<PeakPowerTrendPoint> trend = findPeakTrend(plantId, from, to, periodRange.period());
+		List<PeakPowerTrendPoint> previousPeriodTrend = findPeakTrend(
 			plantId,
-			resolvedDate.minusDays(1).atStartOfDay(),
-			resolvedDate.atStartOfDay()
+			previousPeriodRange.from().atStartOfDay(),
+			previousPeriodRange.to().atStartOfDay(),
+			periodRange.period()
 		);
 		List<PeakPowerFacilityRanking> ranking = energyMapper.findPeakPowerFacilityRanking(plantId, from, to, 5);
 		List<PeakPowerHistory> history = energyMapper.findPeakPowerHistory(
@@ -147,7 +154,12 @@ public class EnergyService {
 			from,
 			to,
 			thresholdKw,
-			10
+			periodRange.period() == PeakPowerPeriod.DAY ? 10 : 20
+		);
+		List<PeakPowerPlantComparison> plantComparison = energyMapper.findPeakPowerPlantComparison(
+			from,
+			to,
+			FACILITY_PEAK_THRESHOLD_KW
 		);
 
 		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
@@ -155,15 +167,15 @@ public class EnergyService {
 		BigDecimal currentKw = latestMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestMeasurement.getPeakKw());
 		BigDecimal intervalAverageKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getAverageKw());
 		BigDecimal intervalMaxKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getMaxKw());
-		BigDecimal previousDayAverageKw = averagePeak(previousDayTrend);
+		BigDecimal previousPeriodAverageKw = averagePeak(previousPeriodTrend);
 
 		PeakPowerMetricResponse metrics = new PeakPowerMetricResponse(
 			currentKw,
 			rateOf(currentKw, thresholdKw),
 			intervalAverageKw,
 			intervalMaxKw,
-			previousDayAverageKw,
-			rateOf(currentKw, previousDayAverageKw),
+			previousPeriodAverageKw,
+			rateOf(currentKw, previousPeriodAverageKw),
 			thresholdKw,
 			latestMeasurement == null ? null : latestMeasurement.getMeasuredAt(),
 			latestInterval == null ? null : latestInterval.getMeasuredAt()
@@ -172,10 +184,14 @@ public class EnergyService {
 		return new PeakPowerDashboardResponse(
 			plantId,
 			resolvedDate,
+			periodRange.period(),
+			periodRange.from(),
+			periodRange.to().minusDays(1),
 			metrics,
 			trend,
 			ranking,
-			history
+			history,
+			plantComparison
 		);
 	}
 
@@ -413,6 +429,41 @@ public class EnergyService {
 			.orElse(BigDecimal.ZERO);
 	}
 
+	private PeakPowerPeriodRange resolvePeakPowerPeriodRange(LocalDate targetDate, PeakPowerPeriod period) {
+		PeakPowerPeriod resolvedPeriod = period == null ? PeakPowerPeriod.DAY : period;
+		return switch (resolvedPeriod) {
+			case DAY -> new PeakPowerPeriodRange(resolvedPeriod, targetDate, targetDate.plusDays(1));
+			case WEEK -> {
+				LocalDate weekStart = targetDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+				yield new PeakPowerPeriodRange(resolvedPeriod, weekStart, weekStart.plusWeeks(1));
+			}
+			case MONTH -> {
+				LocalDate monthStart = targetDate.withDayOfMonth(1);
+				yield new PeakPowerPeriodRange(resolvedPeriod, monthStart, monthStart.plusMonths(1));
+			}
+		};
+	}
+
+	private PeakPowerPeriodRange previousPeakPowerPeriodRange(PeakPowerPeriodRange periodRange) {
+		return switch (periodRange.period()) {
+			case DAY -> new PeakPowerPeriodRange(PeakPowerPeriod.DAY, periodRange.from().minusDays(1), periodRange.from());
+			case WEEK -> new PeakPowerPeriodRange(PeakPowerPeriod.WEEK, periodRange.from().minusWeeks(1), periodRange.from());
+			case MONTH -> new PeakPowerPeriodRange(PeakPowerPeriod.MONTH, periodRange.from().minusMonths(1), periodRange.from());
+		};
+	}
+
+	private List<PeakPowerTrendPoint> findPeakTrend(
+		Long plantId,
+		LocalDateTime from,
+		LocalDateTime to,
+		PeakPowerPeriod period
+	) {
+		if (period == PeakPowerPeriod.DAY) {
+			return energyMapper.findPeakPowerTrend(plantId, from, to);
+		}
+		return energyMapper.findPeakPowerDailyTrend(plantId, from, to);
+	}
+
 	private BigDecimal changeRate(BigDecimal currentUsage, BigDecimal previousUsage) {
 		if (previousUsage == null || previousUsage.compareTo(BigDecimal.ZERO) == 0) {
 			return BigDecimal.ZERO;
@@ -461,11 +512,24 @@ public class EnergyService {
 	}
 
 	private BigDecimal peakThresholdForPlant(Long plantId) {
-		int facilityCount = facilityMapper.findByPlantId(plantId).size();
+		long facilityCount = facilityMapper.findByPlantId(plantId).stream()
+			.filter(facility -> isLineFacility(facility.getId(), plantId))
+			.count();
 		if (facilityCount <= 0) {
 			return FACILITY_PEAK_THRESHOLD_KW;
 		}
 		return FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(facilityCount));
+	}
+
+	private boolean isLineFacility(Long facilityId, Long plantId) {
+		if (facilityId == null || plantId == null || facilityId < 10000) {
+			return false;
+		}
+		long sequence = facilityId % 10000;
+		return sequence >= 1 && sequence <= 24 && facilityId / 10000 == plantId;
+	}
+
+	private record PeakPowerPeriodRange(PeakPowerPeriod period, LocalDate from, LocalDate to) {
 	}
 
 	private void createRealtimeAlarms(EnergyMeasurement current, EnergyMeasurement previous) {

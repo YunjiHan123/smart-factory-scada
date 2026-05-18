@@ -14,6 +14,7 @@ import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
+import com.smartfactory.scada.energy.dto.PeakPowerPlantComparison;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
@@ -125,6 +126,12 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	List<PeakPowerTrendPoint> findPeakPowerDailyTrend(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	List<PeakPowerFacilityRanking> findPeakPowerFacilityRanking(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
@@ -138,6 +145,12 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to,
 		@Param("thresholdKw") java.math.BigDecimal thresholdKw,
 		@Param("limit") int limit
+	);
+
+	List<PeakPowerPlantComparison> findPeakPowerPlantComparison(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to,
+		@Param("facilityThresholdKw") java.math.BigDecimal facilityThresholdKw
 	);
 
 	Optional<EnergyMeasurement> findLatestPlantMeasurement(

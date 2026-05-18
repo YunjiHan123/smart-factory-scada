@@ -34,6 +34,8 @@ const selectedEnergyType = ref('ELECTRICITY')
 const selectedDateFrom = ref('')
 const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
+const selectedPeakPeriod = ref('DAY')
+const activePeakView = ref('comparison')
 const selectedUtilityDate = ref(formatDateInput(new Date()))
 const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
@@ -117,6 +119,16 @@ const facilityLineOptions = [
   { value: 'BODY', label: '차체' },
   { value: 'ASSEMBLY', label: '의장' },
   { value: 'PAINT', label: '도장' },
+]
+const peakPeriodOptions = [
+  { value: 'DAY', label: '일' },
+  { value: 'WEEK', label: '주' },
+  { value: 'MONTH', label: '월' },
+]
+const peakViewOptions = [
+  { value: 'comparison', label: '공장별 비교' },
+  { value: 'detail', label: '공장 상세 추이' },
+  { value: 'anomaly', label: '이상 날짜' },
 ]
 const equipmentProcessNames = {
   1: '메인 프레스기',
@@ -266,6 +278,7 @@ const assignedPlantId = computed(() => {
   return Number.isFinite(plantId) && plantId > 0 ? plantId : null
 })
 const selectedFacilityDateIsToday = computed(() => selectedFacilityDate.value === formatDateInput(new Date()))
+const selectedPeakDateIsToday = computed(() => selectedPeakDate.value === formatDateInput(new Date()))
 const facilityEquipmentCards = computed(() => {
   const cards = state.facilityLineUsages.length
     ? state.facilityLineUsages
@@ -709,7 +722,7 @@ const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.al
 const peakMetrics = computed(() => {
   const metrics = state.peakDashboard?.metrics || {}
   const live = selectedPlantLiveEnergy.value
-  if (!live) {
+  if (!live || selectedPeakPeriod.value !== 'DAY' || !selectedPeakDateIsToday.value) {
     return metrics
   }
 
@@ -742,6 +755,51 @@ const peakMetrics = computed(() => {
 const peakTrend = computed(() => state.peakDashboard?.trend || [])
 const peakRanking = computed(() => state.peakDashboard?.facilityRanking || [])
 const peakHistory = computed(() => state.peakDashboard?.history || [])
+const peakPlantComparison = computed(() => state.peakDashboard?.plantComparison || [])
+const peakPeriodLabel = computed(
+  () => peakPeriodOptions.find((option) => option.value === selectedPeakPeriod.value)?.label || '일',
+)
+const peakPeriodRangeLabel = computed(() => {
+  const from = state.peakDashboard?.periodFrom || state.peakDashboard?.period_from || selectedPeakDate.value
+  const to = state.peakDashboard?.periodTo || state.peakDashboard?.period_to || selectedPeakDate.value
+  return from === to ? formatDate(from) : `${formatDate(from)} - ${formatDate(to)}`
+})
+const peakComparisonSubtitle = computed(() => `${peakPeriodRangeLabel.value} · 단위: kW`)
+const peakTrendTitle = computed(() => `${peakPeriodLabel.value} 단위 피크 전력 추이`)
+const peakPreviousPeriodLabel = computed(() =>
+  selectedPeakPeriod.value === 'DAY' ? '전일 평균 대비' : '직전 기간 평균 대비',
+)
+const peakLivePillLabel = computed(() =>
+  selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value && liveEnergyFresh.value
+    ? '실시간 수신 중'
+    : `${peakPeriodLabel.value} 단위 데이터`,
+)
+const peakComparisonMax = computed(() =>
+  Math.max(1, ...peakPlantComparison.value.map((plant) => Number(plant.periodPeakKw || plant.period_peak_kw || 0))),
+)
+const selectedPeakPlantComparison = computed(() =>
+  peakPlantComparison.value.find((plant) => Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)) || null,
+)
+const peakComparisonRows = computed(() =>
+  peakPlantComparison.value
+    .map((plant, index) => {
+      const peakKw = Number(plant.periodPeakKw || plant.period_peak_kw || 0)
+      const thresholdKw = Number(plant.thresholdKw || plant.threshold_kw || 0)
+      return {
+        plantId: plant.plantId || plant.plant_id,
+        plantName: plant.plantName || plant.plant_name || `공장 ${plant.plantId || plant.plant_id}`,
+        rank: plant.rank || plant.plant_rank || index + 1,
+        periodPeakKw: peakKw,
+        periodAverageKw: Number(plant.periodAverageKw || plant.period_average_kw || 0),
+        thresholdKw,
+        peakUsageRate: Number(plant.peakUsageRate || plant.peak_usage_rate || 0),
+        exceeded: plant.exceeded === true || plant.exceeded === 1 || plant.exceeded === 'true',
+        barWidth: `${Math.max(6, Math.round((peakKw / peakComparisonMax.value) * 100))}%`,
+        active: Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value),
+      }
+    })
+    .sort((a, b) => a.rank - b.rank),
+)
 const peakThresholdKw = computed(() => Number(peakMetrics.value.thresholdKw || 1400))
 const peakGaugeRate = computed(() => Math.min(Number(peakMetrics.value.peakUsageRate || 0), 125))
 const peakGaugeStyle = computed(() => ({ '--peak-rate': `${Math.min(peakGaugeRate.value, 100)}%` }))
@@ -1058,6 +1116,14 @@ function formatDateTime(value) {
 function formatTime(value) {
   const formatted = formatDateTime(value)
   return formatted === '-' ? '-' : formatted.slice(11, 16)
+}
+
+function peakPointLabel(value) {
+  if (selectedPeakPeriod.value === 'DAY') {
+    return formatTime(value)
+  }
+  const date = formatDate(value)
+  return date === '-' ? '-' : date.slice(5)
 }
 
 function linePath(points, key, maxValue) {
@@ -1496,6 +1562,7 @@ async function loadPeakDashboard() {
   state.peakDashboard = await api.peakDashboard({
     plantId: selectedPlantId.value,
     date: selectedPeakDate.value || undefined,
+    period: selectedPeakPeriod.value,
   })
 }
 
@@ -1803,6 +1870,12 @@ watch(selectedEnergyType, () => {
 })
 
 watch(selectedPeakDate, () => {
+  if (appMode.value !== 'login' && activePage.value === 'peak' && !syncingSelection.value) {
+    run(loadPeakDashboard)
+  }
+})
+
+watch(selectedPeakPeriod, () => {
   if (appMode.value !== 'login' && activePage.value === 'peak' && !syncingSelection.value) {
     run(loadPeakDashboard)
   }
@@ -2155,10 +2228,24 @@ onUnmounted(() => {
             조회일
             <input v-model="selectedPeakDate" type="date" />
           </label>
+          <div class="peak-period-control">
+            <span>집계 단위</span>
+            <div class="segmented">
+              <button
+                v-for="option in peakPeriodOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: selectedPeakPeriod === option.value }"
+                @click="selectedPeakPeriod = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
           <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
             <Search :size="17" /> 조회
           </button>
-          <span class="live-pill">{{ liveEnergyFresh ? '실시간 수신 중' : '금일 데이터 조회' }}</span>
+          <span class="live-pill">{{ peakLivePillLabel }}</span>
         </section>
 
         <section class="peak-kpi-grid">
@@ -2181,22 +2268,74 @@ onUnmounted(() => {
           <article class="peak-kpi-card">
             <span class="peak-card-icon green"><Activity :size="22" /></span>
             <div>
-              <p>15분 평균 전력</p>
+              <p>{{ selectedPeakPeriod === 'DAY' ? '15분 평균 전력' : `${peakPeriodLabel} 평균 전력` }}</p>
               <b>{{ formatNumber(peakMetrics.intervalAverageKw) }}<small> kW</small></b>
-              <em>구간 {{ formatTime(peakMetrics.intervalAt) }}</em>
+              <em>{{ selectedPeakPeriod === 'DAY' ? `구간 ${formatTime(peakMetrics.intervalAt)}` : peakPeriodRangeLabel }}</em>
             </div>
           </article>
           <article class="peak-kpi-card">
             <span class="peak-card-icon purple"><Bolt :size="22" /></span>
             <div>
-              <p>15분 최대 전력</p>
+              <p>{{ selectedPeakPeriod === 'DAY' ? '15분 최대 전력' : `${peakPeriodLabel} 최대 전력` }}</p>
               <b>{{ formatNumber(peakMetrics.intervalMaxKw) }}<small> kW</small></b>
-              <em>전날 평균 대비 {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
+              <em>{{ peakPreviousPeriodLabel }} {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
             </div>
           </article>
         </section>
 
-        <section class="peak-content-grid">
+        <section class="peak-view-tabs" aria-label="피크 전력 보기">
+          <button
+            v-for="option in peakViewOptions"
+            :key="option.value"
+            type="button"
+            :class="{ active: activePeakView === option.value }"
+            @click="activePeakView = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </section>
+
+        <section v-if="activePeakView === 'comparison'" class="peak-comparison-grid">
+          <article class="panel peak-comparison-panel">
+            <div class="panel-title inline">
+              <h2>공장별 피크 전력 비교</h2>
+              <span>{{ peakComparisonSubtitle }}</span>
+            </div>
+            <div class="peak-plant-bars">
+              <button
+                v-for="plant in peakComparisonRows"
+                :key="plant.plantId"
+                type="button"
+                :class="{ active: plant.active, danger: plant.exceeded }"
+                @click="selectedPlantId = plant.plantId"
+              >
+                <b>{{ plant.rank }}</b>
+                <span>{{ plant.plantName }}</span>
+                <i><em :style="{ width: plant.barWidth }"></em></i>
+                <strong>{{ formatNumber(plant.periodPeakKw, 0) }} kW</strong>
+                <small>{{ formatNumber(plant.peakUsageRate) }}%</small>
+              </button>
+            </div>
+          </article>
+
+          <article class="panel peak-selected-plant-panel">
+            <div class="panel-title inline">
+              <h2>선택 공장 요약</h2>
+              <Factory :size="20" />
+            </div>
+            <div class="peak-selected-summary">
+              <strong>{{ selectedPeakPlantComparison?.plantName || selectedPlant?.name || '-' }}</strong>
+              <b>{{ formatNumber(selectedPeakPlantComparison?.periodPeakKw, 0) }}<small> kW</small></b>
+              <span>평균 {{ formatNumber(selectedPeakPlantComparison?.periodAverageKw, 0) }} kW</span>
+              <span>기준 {{ formatNumber(selectedPeakPlantComparison?.thresholdKw, 0) }} kW</span>
+              <em :class="{ up: Number(selectedPeakPlantComparison?.peakUsageRate || 0) >= 100 }">
+                사용률 {{ formatNumber(selectedPeakPlantComparison?.peakUsageRate) }}%
+              </em>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activePeakView === 'detail'" class="peak-content-grid">
           <article class="panel peak-gauge-panel">
             <div class="panel-title inline">
               <h2>피크 사용률 현황</h2>
@@ -2215,14 +2354,14 @@ onUnmounted(() => {
 
           <article class="panel peak-chart-panel">
             <div class="panel-title inline">
-              <h2>금일 피크 전력 추이</h2>
+              <h2>{{ peakTrendTitle }}</h2>
               <div class="peak-legend">
-                <span><i class="avg"></i>15분 평균</span>
-                <span><i class="max"></i>15분 최대</span>
+                <span><i class="avg"></i>{{ selectedPeakPeriod === 'DAY' ? '15분 평균' : '일 평균' }}</span>
+                <span><i class="max"></i>{{ selectedPeakPeriod === 'DAY' ? '15분 최대' : '일 최대' }}</span>
                 <span><i class="limit"></i>피크 기준</span>
               </div>
             </div>
-            <svg class="peak-line-chart" viewBox="0 0 720 240" role="img" aria-label="금일 피크 전력 추이">
+            <svg class="peak-line-chart" viewBox="0 0 720 240" role="img" :aria-label="peakTrendTitle">
               <g class="peak-grid-lines">
                 <line v-for="row in 5" :key="row" x1="0" x2="720" :y1="row * 44" :y2="row * 44" />
               </g>
@@ -2237,9 +2376,9 @@ onUnmounted(() => {
               <path v-if="peakMaxPath" class="peak-line max" :d="peakMaxPath" />
             </svg>
             <div class="peak-chart-axis">
-              <span>{{ formatTime(peakTrendPoints[0]?.measuredAt) }}</span>
+              <span>{{ peakPointLabel(peakTrendPoints[0]?.measuredAt) }}</span>
               <span>{{ formatNumber(peakTrendMax, 0) }} kW</span>
-              <span>{{ formatTime(peakTrendPoints.at(-1)?.measuredAt) }}</span>
+              <span>{{ peakPointLabel(peakTrendPoints.at(-1)?.measuredAt) }}</span>
             </div>
           </article>
 
@@ -2262,9 +2401,9 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <article class="panel table-panel peak-history-panel">
+        <article v-else-if="activePeakView === 'anomaly'" class="panel table-panel peak-history-panel">
           <div class="panel-title inline">
-            <h2>피크 발생 이력</h2>
+            <h2>기준 초과 날짜</h2>
             <History :size="20" />
           </div>
           <table>
@@ -2290,7 +2429,7 @@ onUnmounted(() => {
                 <td>{{ row.exceeded ? '피크 초과' : '-' }}</td>
               </tr>
               <tr v-if="!peakHistoryRows.length">
-                <td colspan="7">조회일에 피크 발생 이력이 없습니다.</td>
+                <td colspan="7">{{ peakPeriodRangeLabel }} 기간에 피크 초과 이력이 없습니다.</td>
               </tr>
             </tbody>
           </table>
