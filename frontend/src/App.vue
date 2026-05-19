@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   Activity,
   AlertTriangle,
@@ -25,6 +25,7 @@ import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
 const SCADA_EXTERNAL_URL = 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
+const KAKAO_MAP_APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY
 const activePage = ref('facility')
 const loading = ref(false)
 const errorMessage = ref('')
@@ -50,6 +51,12 @@ const userCreating = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
+const esgMapElement = ref(null)
+const esgMapState = reactive({
+  status: KAKAO_MAP_APP_KEY ? 'idle' : 'missing-key',
+  message: KAKAO_MAP_APP_KEY ? '' : 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.',
+})
+const alarmSortOrder = ref('desc')
 const syncingSelection = ref(false)
 const realtimeNow = ref(Date.now())
 let energySocket = null
@@ -61,6 +68,10 @@ let latestEnergyPollRetryAt = 0
 let latestEnergyPollFailureCount = 0
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
+let esgMapScriptPromise = null
+let esgKakaoMap = null
+let esgKakaoMarkers = []
+let esgKakaoOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
 let lastAlarmRefreshAt = 0
@@ -69,10 +80,19 @@ const LIVE_STALE_MS = 5000
 const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
 const PLANT_PEAK_THRESHOLD_KW = 8500
+const DEFAULT_PLANT_LOCATIONS = {
+  1: { plantName: '기아 화성', latitude: 37.021559, longitude: 126.783111 },
+  2: { plantName: '기아 광명', latitude: 37.430203, longitude: 126.878945 },
+  3: { plantName: '기아 광주', latitude: 35.160108, longitude: 126.882618 },
+  4: { plantName: '현대 울산', latitude: 35.538377, longitude: 129.376513 },
+  5: { plantName: '현대 아산', latitude: 36.838508, longitude: 126.881593 },
+  6: { plantName: '현대 전주', latitude: 35.956543, longitude: 127.134506 },
+}
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
 const liveEnergySeenAtByFacility = reactive(new Map())
+const alarmActiveKeywords = reactive({})
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -797,11 +817,166 @@ function esgTrendClass(value, inverse = false) {
   return good ? 'down' : 'up'
 }
 
-function esgPlantMapStyle(index) {
-  const position = esgMapPositions[index % esgMapPositions.length]
-  return {
-    left: `${position.left}%`,
-    top: `${position.top}%`,
+function plantIdentifier(plant) {
+  const value = plant?.plantId ?? plant?.plant_id ?? plant?.id
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function loadKakaoMapsScript() {
+  if (!KAKAO_MAP_APP_KEY) {
+    return Promise.reject(new Error('Kakao Maps API key is missing.'))
+  }
+
+  if (window.kakao?.maps) {
+    return new Promise((resolve) => window.kakao.maps.load(resolve))
+  }
+
+  if (!esgMapScriptPromise) {
+    esgMapScriptPromise = new Promise((resolve, reject) => {
+      const existingScript = document.getElementById('kakao-maps-sdk')
+      if (existingScript) {
+        existingScript.addEventListener('load', () => {
+          if (window.kakao?.maps) {
+            window.kakao.maps.load(resolve)
+          } else {
+            reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
+          }
+        }, { once: true })
+        existingScript.addEventListener('error', reject, { once: true })
+        return
+      }
+
+      const script = document.createElement('script')
+      script.id = 'kakao-maps-sdk'
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_MAP_APP_KEY}&autoload=false`
+      script.async = true
+      script.onload = () => {
+        if (window.kakao?.maps) {
+          window.kakao.maps.load(resolve)
+        } else {
+          reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
+        }
+      }
+      script.onerror = () => reject(new Error('Kakao Maps SDK could not be loaded.'))
+      document.head.appendChild(script)
+    })
+  }
+
+  return esgMapScriptPromise
+}
+
+function clearEsgMapMarkers() {
+  esgKakaoMarkers.forEach(({ marker }) => marker.setMap(null))
+  esgKakaoOverlays.forEach((overlay) => overlay.setMap(null))
+  esgKakaoMarkers = []
+  esgKakaoOverlays = []
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function esgMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+  return `
+    <div class="esg-map-label${active ? ' active' : ''}">
+      <strong class="${esgGradeClass(plant.grade)}">${escapeHtml(plant.grade || '-')}</strong>
+      <span>${escapeHtml(plant.plantName || '-')}</span>
+    </div>
+  `
+}
+
+async function renderEsgKakaoMap() {
+  if (activePage.value !== 'esg') {
+    return
+  }
+
+  await nextTick()
+  const plants = esgMapPlants.value
+
+  if (!KAKAO_MAP_APP_KEY) {
+    esgMapState.status = 'missing-key'
+    esgMapState.message = 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.'
+    return
+  }
+
+  const container = esgMapElement.value
+  if (!container) {
+    return
+  }
+
+  if (!plants.length) {
+    esgMapState.status = 'empty'
+    esgMapState.message = '좌표가 있는 사업장 데이터가 없습니다.'
+    clearEsgMapMarkers()
+    return
+  }
+
+  esgMapState.status = 'loading'
+  esgMapState.message = '지도를 불러오는 중입니다.'
+
+  try {
+    await loadKakaoMapsScript()
+    const maps = window.kakao.maps
+    const center = new maps.LatLng(36.4, 127.9)
+
+    if (!esgKakaoMap) {
+      esgKakaoMap = new maps.Map(container, {
+        center,
+        level: plants.length > 1 ? 12 : 8,
+      })
+    } else {
+      esgKakaoMap.setCenter(center)
+    }
+
+    clearEsgMapMarkers()
+    const bounds = new maps.LatLngBounds()
+
+    plants.forEach((plant) => {
+      const position = new maps.LatLng(Number(plant.latitude), Number(plant.longitude))
+      bounds.extend(position)
+      const marker = new maps.Marker({
+        map: esgKakaoMap,
+        position,
+        title: plant.plantName,
+      })
+
+      maps.event.addListener(marker, 'click', () => {
+        selectedPlantId.value = plant.plantId
+      })
+
+      const overlay = new maps.CustomOverlay({
+        content: esgMapOverlayContent(plant),
+        position,
+        xAnchor: 0.5,
+        yAnchor: 2.45,
+        zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
+      })
+      overlay.setMap(esgKakaoMap)
+
+      esgKakaoMarkers.push({ marker, plant })
+      esgKakaoOverlays.push(overlay)
+    })
+
+    if (plants.length > 1) {
+      esgKakaoMap.setBounds(bounds, 28, 28, 28, 28)
+    } else {
+      esgKakaoMap.setLevel(8)
+    }
+
+    esgMapState.status = 'ready'
+    esgMapState.message = ''
+  } catch (error) {
+    console.error(error)
+    clearEsgMapMarkers()
+    esgMapState.status = 'error'
+    esgMapState.message = '지도를 불러오지 못했습니다. API 키와 도메인 설정을 확인해 주세요.'
   }
 }
 
@@ -852,6 +1027,66 @@ const peakUsageRate = computed(() => {
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
+const alarmTypeLabels = {
+  PEAK: '피크',
+  ELECTRICITY: '전기',
+  GAS: '가스',
+  WATER: '용수',
+  FACILITY: '설비',
+  ESG: 'ESG',
+}
+const occurredAlarms = computed(() =>
+  state.alarms.filter((alarm) => (alarm.status || 'OCCURRED') === 'OCCURRED'),
+)
+const alarmPlantGroups = computed(() => {
+  const plants = new Map()
+
+  sortedAlarms(occurredAlarms.value).forEach((alarm) => {
+    const plantId = alarm.plantId ?? selectedPlantId.value ?? 'all'
+    const plantName = alarm.plantName || selectedPlant.value?.name || `사업장 ${plantId}`
+    const plantKey = String(plantId)
+    const keyword = alarmKeyword(alarm)
+
+    if (!plants.has(plantKey)) {
+      plants.set(plantKey, {
+        key: plantKey,
+        plantId,
+        plantName,
+        totalCount: 0,
+        keywords: new Map(),
+      })
+    }
+
+    const plant = plants.get(plantKey)
+    plant.totalCount += 1
+
+    if (!plant.keywords.has(keyword.key)) {
+      plant.keywords.set(keyword.key, {
+        ...keyword,
+        alarms: [],
+      })
+    }
+
+    plant.keywords.get(keyword.key).alarms.push(alarm)
+  })
+
+  return Array.from(plants.values())
+    .map((plant) => {
+      const keywordTabs = Array.from(plant.keywords.values())
+        .map((keyword) => ({
+          ...keyword,
+          count: keyword.alarms.length,
+          alarms: sortedAlarms(keyword.alarms),
+        }))
+        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko-KR'))
+
+      return {
+        ...plant,
+        keywordTabs,
+      }
+    })
+    .sort((a, b) => String(a.plantName).localeCompare(String(b.plantName), 'ko-KR'))
+})
 const peakMetrics = computed(() => {
   const metrics = state.peakDashboard?.metrics || {}
   const live = selectedPlantLiveEnergy.value
@@ -1157,6 +1392,103 @@ const selectedEsgPlant = computed(
     esgPlants.value[0] ||
     null,
 )
+const esgMapPlants = computed(() => {
+  const plantLocations = new Map(state.plants.map((plant) => [plantIdentifier(plant), plant]))
+  const esgPlantScores = new Map(esgPlants.value.map((plant) => [plantIdentifier(plant), plant]))
+  const defaultLocationByName = new Map(
+    Object.entries(DEFAULT_PLANT_LOCATIONS).map(([plantId, location]) => [location.plantName, { plantId: Number(plantId), ...location }]),
+  )
+  const normalizePlant = (plant) => {
+    const plantId = plantIdentifier(plant)
+    const plantName = plant?.plantName ?? plant?.plant_name ?? plant?.name
+    const location = plantLocations.get(plantId) || DEFAULT_PLANT_LOCATIONS[plantId] || defaultLocationByName.get(plantName) || {}
+    return {
+      ...plant,
+      plantId: plantId || location.plantId,
+      plantName: plantName || location.plantName || location.name,
+      latitude: plant?.latitude ?? plant?.lat ?? location.latitude,
+      longitude: plant?.longitude ?? plant?.lng ?? location.longitude,
+    }
+  }
+  const mergedPlantIds = new Set([
+    ...esgPlants.value.map(plantIdentifier).filter((plantId) => plantId != null),
+    ...state.plants.map(plantIdentifier).filter((plantId) => plantId != null),
+  ])
+  const mergedPlants = [...mergedPlantIds].map((plantId) => normalizePlant({
+    ...plantLocations.get(plantId),
+    ...esgPlantScores.get(plantId),
+  }))
+
+  const sourcePlants = mergedPlants.length
+    ? mergedPlants
+    : state.plants.map((plant) => normalizePlant({
+      ...plant,
+      grade: '-',
+      totalScore: null,
+    }))
+
+  return sourcePlants.filter((plant) =>
+    Number.isFinite(Number(plant.latitude)) && Number.isFinite(Number(plant.longitude)),
+  )
+})
+const esgSchematicMap = computed(() => {
+  const plants = esgMapPlants.value
+  if (!plants.length) {
+    return []
+  }
+
+  const sortedPlants = [...plants].sort((left, right) =>
+    Number(left.rank || 99) - Number(right.rank || 99) ||
+    String(left.plantName || '').localeCompare(String(right.plantName || ''), 'ko'),
+  )
+  const leftSlots = [
+    { left: 2.4, top: 10 },
+    { left: 2.4, top: 35 },
+    { left: 2.4, top: 60 },
+  ]
+  const rightSlots = [
+    { left: 76.4, top: 10 },
+    { left: 76.4, top: 35 },
+    { left: 76.4, top: 60 },
+  ]
+  const half = Math.ceil(sortedPlants.length / 2)
+
+  return sortedPlants.map((plant, index) => {
+    const normalizedLng = Math.max(0, Math.min((Number(plant.longitude) - 125.6) / (129.9 - 125.6), 1))
+    const normalizedLat = Math.max(0, Math.min((Number(plant.latitude) - 34.6) / (38.3 - 34.6), 1))
+    const pinX = 38 + normalizedLng * 30
+    const pinY = 17 + (1 - normalizedLat) * 62
+    const side = index < half ? 'left' : 'right'
+    const slot = side === 'left' ? leftSlots[index % leftSlots.length] : rightSlots[(index - half) % rightSlots.length]
+
+    return {
+      plant,
+      side,
+      cardStyle: {
+        left: `${slot.left}%`,
+        top: `${slot.top}%`,
+      },
+      pinStyle: {
+        left: `${pinX}%`,
+        top: `${pinY}%`,
+      },
+    }
+  })
+})
+
+function esgGradeClass(grade) {
+  if (['AAA', 'AA', 'A'].includes(grade)) {
+    return 'good'
+  }
+  if (['BBB', 'BB'].includes(grade)) {
+    return 'watch'
+  }
+  return 'risk'
+}
+
+function esgSchematicScore(plant) {
+  return plant.totalScore == null ? '-' : formatNumber(plant.totalScore)
+}
 const esgMetrics = computed(() => {
   const plant = selectedEsgPlant.value
   if (!plant) {
@@ -1229,15 +1561,6 @@ const esgCompareRows = computed(() =>
     scores: [plant.carbonScore, plant.waterScore, plant.solarScore, plant.peakScore].map((score) => Number(score || 0)),
   })),
 )
-const esgMapPositions = [
-  { left: 24, top: 20 },
-  { left: 58, top: 26 },
-  { left: 42, top: 44 },
-  { left: 70, top: 54 },
-  { left: 31, top: 66 },
-  { left: 56, top: 74 },
-]
-
 function buildScadaExternalUrl(userName) {
   const url = new URL(SCADA_EXTERNAL_URL)
   if (userName) {
@@ -1309,6 +1632,40 @@ function formatNumber(value, digits = 1) {
   return Number(value).toLocaleString('ko-KR', {
     maximumFractionDigits: digits,
   })
+}
+
+function alarmKeyword(alarm) {
+  const key = alarm.alarmType || String(alarm.message || '기타').trim().split(/\s+/)[0] || 'OTHER'
+  return {
+    key,
+    label: alarmTypeLabels[key] || key,
+  }
+}
+
+function sortedAlarms(alarms) {
+  const direction = alarmSortOrder.value === 'asc' ? 1 : -1
+  return [...alarms].sort((a, b) => {
+    const aTime = Date.parse(a.occurredAt || '') || 0
+    const bTime = Date.parse(b.occurredAt || '') || 0
+    return (aTime - bTime) * direction
+  })
+}
+
+function activeAlarmKeyword(group) {
+  const current = alarmActiveKeywords[group.key]
+  if (group.keywordTabs.some((tab) => tab.key === current)) {
+    return current
+  }
+  return group.keywordTabs[0]?.key || null
+}
+
+function selectAlarmKeyword(groupKey, keyword) {
+  alarmActiveKeywords[groupKey] = keyword
+}
+
+function activeAlarmRows(group) {
+  const activeKeyword = activeAlarmKeyword(group)
+  return group.keywordTabs.find((tab) => tab.key === activeKeyword)?.alarms || []
 }
 
 function formatDateTime(value) {
@@ -1639,8 +1996,16 @@ async function loadActivePageData() {
   }
 
   if (activePage.value === 'alarms') {
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   }
+}
+
+async function loadAlarms() {
+  state.alarms = await api.alarms({
+    plantId: selectedPlantId.value || undefined,
+    status: 'OCCURRED',
+    limit: 100,
+  })
 }
 
 async function loadChatbotMessages() {
@@ -2008,6 +2373,7 @@ async function loadEsgDashboard() {
     plantId: selectedPlantId.value || undefined,
     ...dateRangeParams(range.from, range.to),
   })
+  await renderEsgKakaoMap()
 }
 
 async function loadLatestEnergy() {
@@ -2224,24 +2590,21 @@ function scheduleAlarmRefresh() {
     return
   }
   lastAlarmRefreshAt = Date.now()
-  api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
-    .then((alarms) => {
-      state.alarms = alarms
-    })
+  loadAlarms()
     .catch(() => {})
 }
 
 async function resolveAlarm(alarmId) {
   await run(async () => {
     await api.resolveAlarm(alarmId)
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   })
 }
 
 async function deleteAlarm(alarmId) {
   await run(async () => {
     await api.deleteAlarm(alarmId)
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   })
 }
 
@@ -2365,6 +2728,12 @@ watch(selectedEsgMonth, () => {
   }
 })
 
+watch([selectedEsgPlant, esgMapPlants, activePage], () => {
+  if (appMode.value !== 'login' && activePage.value === 'esg') {
+    renderEsgKakaoMap()
+  }
+}, { flush: 'post' })
+
 onMounted(() => {
   applyRoute()
   window.addEventListener('hashchange', applyRoute)
@@ -2380,6 +2749,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopEnergyWebSocket()
   stopEnergyPolling()
+  clearEsgMapMarkers()
   window.clearInterval(realtimeTickTimer)
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
@@ -3265,18 +3635,69 @@ onUnmounted(() => {
               <h2>사업장 환경 등급 현황</h2>
               <span>{{ selectedEsgFrom }} - {{ selectedEsgTo }}</span>
             </div>
-            <div class="esg-map">
+            <div class="esg-map-shell">
               <div
-                v-for="(plant, index) in esgPlants"
-                :key="plant.plantId"
-                class="esg-map-pin"
-                :class="{ active: plant.plantId === selectedEsgPlant?.plantId }"
-                :style="esgPlantMapStyle(index)"
-              >
-                <Factory :size="17" />
-                <strong>{{ plant.grade }}</strong>
-                <span>{{ plant.plantName }}</span>
-                <b>{{ formatNumber(plant.totalScore) }}</b>
+                ref="esgMapElement"
+                class="esg-map"
+                :class="{ hidden: esgMapState.status === 'fallback' }"
+                aria-label="사업장 ESG 지도"
+              ></div>
+              <div v-if="esgMapState.status === 'fallback'" class="esg-schematic-map" aria-label="사업장 ESG 지도">
+                <svg class="esg-korea-shape" viewBox="0 0 100 100" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="esgMapLand" x1="0" x2="1" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#eff6ff" />
+                      <stop offset="55%" stop-color="#dcfce7" />
+                      <stop offset="100%" stop-color="#cffafe" />
+                    </linearGradient>
+                    <filter id="esgMapGlow">
+                      <feGaussianBlur stdDeviation="1.8" result="blur" />
+                      <feMerge>
+                        <feMergeNode in="blur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <path
+                    class="esg-korea-mainland"
+                    d="M51 5 C58 7 63 11 66 18 C70 25 77 27 75 36 C73 45 79 51 75 59 C71 67 62 69 61 78 C60 88 49 94 41 88 C35 84 34 74 38 67 C42 59 37 54 39 47 C41 40 35 33 39 26 C43 18 44 10 51 5 Z"
+                  />
+                  <path
+                    class="esg-korea-coastline"
+                    d="M36 38 C30 43 25 48 20 55 C16 61 12 70 17 76 C23 83 33 78 38 72"
+                  />
+                  <ellipse class="esg-korea-island" cx="31" cy="88" rx="8" ry="3.8" />
+                </svg>
+                <button
+                  v-for="marker in esgSchematicMap"
+                  :key="marker.plant.plantId"
+                  type="button"
+                  class="esg-schematic-card"
+                  :class="{ active: Number(marker.plant.plantId) === Number(selectedEsgPlant?.plantId) }"
+                  :style="marker.cardStyle"
+                  @click="selectedPlantId = marker.plant.plantId"
+                >
+                  <span>{{ marker.plant.plantName }}</span>
+                  <strong :class="esgGradeClass(marker.plant.grade)">{{ marker.plant.grade || '-' }}</strong>
+                  <b>{{ esgSchematicScore(marker.plant) }}</b>
+                </button>
+                <button
+                  v-for="marker in esgSchematicMap"
+                  :key="`pin-${marker.plant.plantId}`"
+                  type="button"
+                  class="esg-schematic-pin"
+                  :class="{ active: Number(marker.plant.plantId) === Number(selectedEsgPlant?.plantId) }"
+                  :style="marker.pinStyle"
+                  @click="selectedPlantId = marker.plant.plantId"
+                  :aria-label="`${marker.plant.plantName} ${marker.plant.grade || ''}`"
+                >
+                  <i></i>
+                </button>
+              </div>
+              <div v-if="!['ready', 'fallback'].includes(esgMapState.status)" class="esg-map-state">
+                <Factory :size="22" />
+                <strong>{{ esgMapState.message }}</strong>
+                <span v-if="esgMapState.status === 'missing-key'">frontend/.env에 VITE_KAKAO_MAP_APP_KEY를 추가해 주세요.</span>
               </div>
             </div>
           </article>
@@ -3556,31 +3977,73 @@ onUnmounted(() => {
         </aside>
       </section>
 
-      <section v-else class="page-stack">
-        <article class="panel table-panel">
-          <h2>알람 목록</h2>
-          <div class="alarm-table-scroll">
-            <table>
-              <thead><tr><th>발생 시각</th><th>설비</th><th>레벨</th><th>메시지</th><th>값</th><th>기준</th><th>상태</th><th>관리</th></tr></thead>
-              <tbody>
-                <tr v-for="alarm in state.alarms" :key="alarm.id">
-                  <td>{{ formatDateTime(alarm.occurredAt) }}</td>
-                  <td>{{ alarm.facilityName }}</td>
-                  <td>{{ alarm.alarmLevel }}</td>
-                  <td>{{ alarm.message }}</td>
-                  <td>{{ formatNumber(alarm.value) }}</td>
-                  <td>{{ formatNumber(alarm.thresholdValue) }}</td>
-                  <td><span :class="['badge', alarm.status === 'RESOLVED' ? 'ok' : 'warn']">{{ statusLabel(alarm.status) }}</span></td>
-                  <td>
-                    <div class="alarm-action-cell">
-                      <button class="light-button compact" type="button" :disabled="alarm.status === 'RESOLVED'" @click="resolveAlarm(alarm.id)">처리</button>
-                      <button class="danger-button compact" type="button" :disabled="alarm.status !== 'RESOLVED'" @click="deleteAlarm(alarm.id)">삭제</button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+      <section v-else class="page-stack alarm-page">
+        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
+          <div class="panel-title inline alarm-panel-title">
+            <h2>알람 목록</h2>
+            <div class="segmented alarm-sort-switch" role="group" aria-label="알람 정렬">
+              <button
+                type="button"
+                :class="{ active: alarmSortOrder === 'desc' }"
+                @click="alarmSortOrder = 'desc'"
+              >
+                최근순
+              </button>
+              <button
+                type="button"
+                :class="{ active: alarmSortOrder === 'asc' }"
+                @click="alarmSortOrder = 'asc'"
+              >
+                오래된 순
+              </button>
+            </div>
           </div>
+
+          <section v-for="group in alarmPlantGroups" :key="group.key" class="alarm-plant-group">
+            <div class="alarm-plant-header">
+              <h3>{{ group.plantName }}</h3>
+              <span>{{ group.totalCount }}건</span>
+            </div>
+
+            <div class="alarm-keyword-layout">
+              <div class="alarm-keyword-tabs" role="tablist" :aria-label="`${group.plantName} 알람 키워드`">
+                <button
+                  v-for="tab in group.keywordTabs"
+                  :key="tab.key"
+                  type="button"
+                  :class="{ active: activeAlarmKeyword(group) === tab.key }"
+                  role="tab"
+                  :aria-selected="activeAlarmKeyword(group) === tab.key"
+                  @click="selectAlarmKeyword(group.key, tab.key)"
+                >
+                  <span>{{ tab.label }}</span>
+                  <b>{{ tab.count }}</b>
+                </button>
+              </div>
+
+              <div class="alarm-table-scroll alarm-keyword-table">
+                <table>
+                  <thead><tr><th>발생 시각</th><th>설비</th><th>레벨</th><th>메시지</th><th>값</th><th>기준</th><th>상태</th><th>관리</th></tr></thead>
+                  <tbody>
+                    <tr v-for="alarm in activeAlarmRows(group)" :key="alarm.id">
+                      <td>{{ formatDateTime(alarm.occurredAt) }}</td>
+                      <td>{{ alarm.facilityName || '-' }}</td>
+                      <td>{{ alarm.alarmLevel }}</td>
+                      <td>{{ alarm.message }}</td>
+                      <td>{{ formatNumber(alarm.value) }}</td>
+                      <td>{{ formatNumber(alarm.thresholdValue) }}</td>
+                      <td><span class="badge warn">{{ statusLabel(alarm.status) }}</span></td>
+                      <td>
+                        <div class="alarm-action-cell">
+                          <button class="light-button compact" type="button" @click="resolveAlarm(alarm.id)">처리</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         </article>
       </section>
     </section>
