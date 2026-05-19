@@ -39,9 +39,11 @@ const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedPeakPeriod = ref('DAY')
 const activePeakView = ref('comparison')
+const peakDashboardLoading = ref(false)
 const selectedUtilityDate = ref(formatDateInput(new Date()))
 const selectedUtilityPeriod = ref('DAY')
 const activeUtilityView = ref('comparison')
+const utilityDashboardLoading = ref(false)
 const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
 const chatbotQuestion = ref('')
@@ -75,6 +77,8 @@ let esgKakaoOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
 let lastAlarmRefreshAt = 0
+let peakDashboardRequestId = 0
+let utilityDashboardRequestId = 0
 const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
 const LIVE_POLL_MS = 1000
@@ -2329,40 +2333,80 @@ async function loadFacilityDetail() {
   })
 }
 
-async function loadPeakDashboard() {
+async function loadPeakDashboard(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++peakDashboardRequestId
+
   if (!selectedPlantId.value) {
     state.peakDashboard = null
+    if (!silent && requestId === peakDashboardRequestId) {
+      peakDashboardLoading.value = false
+    }
     return
   }
 
-  state.peakDashboard = await api.peakDashboard({
-    plantId: selectedPlantId.value,
-    date: selectedPeakDate.value || undefined,
-    period: selectedPeakPeriod.value,
-  })
-  if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
-    await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
+  if (!silent) {
+    peakDashboardLoading.value = true
   }
-  startEnergyWebSocket()
-  startEnergyPolling()
+
+  try {
+    const dashboard = await api.peakDashboard({
+      plantId: selectedPlantId.value,
+      date: selectedPeakDate.value || undefined,
+      period: selectedPeakPeriod.value,
+    })
+    if (requestId !== peakDashboardRequestId) {
+      return
+    }
+    state.peakDashboard = dashboard
+    if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
+      await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
+    }
+    startEnergyWebSocket()
+    startEnergyPolling()
+  } finally {
+    if (!silent && requestId === peakDashboardRequestId) {
+      peakDashboardLoading.value = false
+    }
+  }
 }
 
-async function loadUtilityDashboard() {
+async function loadUtilityDashboard(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++utilityDashboardRequestId
+
   if (!selectedPlantId.value) {
     state.utilityDashboard = null
+    if (!silent && requestId === utilityDashboardRequestId) {
+      utilityDashboardLoading.value = false
+    }
     return
   }
 
-  state.utilityDashboard = await api.utilityDashboard({
-    plantId: selectedPlantId.value,
-    date: selectedUtilityDate.value || undefined,
-    period: selectedUtilityPeriod.value,
-  })
-  if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
-    await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
+  if (!silent) {
+    utilityDashboardLoading.value = true
   }
-  startEnergyWebSocket()
-  startEnergyPolling()
+
+  try {
+    const dashboard = await api.utilityDashboard({
+      plantId: selectedPlantId.value,
+      date: selectedUtilityDate.value || undefined,
+      period: selectedUtilityPeriod.value,
+    })
+    if (requestId !== utilityDashboardRequestId) {
+      return
+    }
+    state.utilityDashboard = dashboard
+    if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
+      await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
+    }
+    startEnergyWebSocket()
+    startEnergyPolling()
+  } finally {
+    if (!silent && requestId === utilityDashboardRequestId) {
+      utilityDashboardLoading.value = false
+    }
+  }
 }
 
 async function loadEsgDashboard() {
@@ -2562,26 +2606,26 @@ async function refreshData() {
 }
 
 function schedulePeakRefresh() {
-  if (peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+  if (peakDashboardLoading.value || peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
     return
   }
   window.clearTimeout(peakRefreshTimer)
   peakRefreshTimer = window.setTimeout(() => {
     lastPeakRefreshAt = Date.now()
     peakRefreshTimer = null
-    loadPeakDashboard().catch(() => {})
+    loadPeakDashboard({ silent: true }).catch(() => {})
   }, 1000)
 }
 
 function scheduleUtilityRefresh() {
-  if (utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+  if (utilityDashboardLoading.value || utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
     return
   }
   window.clearTimeout(utilityRefreshTimer)
   utilityRefreshTimer = window.setTimeout(() => {
     lastUtilityRefreshAt = Date.now()
     utilityRefreshTimer = null
-    loadUtilityDashboard().catch(() => {})
+    loadUtilityDashboard({ silent: true }).catch(() => {})
   }, 1000)
 }
 
@@ -3080,7 +3124,7 @@ onUnmounted(() => {
         <section class="peak-filter-row">
           <label>
             조회일
-            <input v-model="selectedPeakDate" type="date" />
+            <input v-model="selectedPeakDate" type="date" :disabled="peakDashboardLoading" />
           </label>
           <div class="peak-period-control">
             <span>집계 단위</span>
@@ -3090,19 +3134,33 @@ onUnmounted(() => {
                 :key="option.value"
                 type="button"
                 :class="{ active: selectedPeakPeriod === option.value }"
+                :disabled="peakDashboardLoading"
                 @click="selectedPeakPeriod = option.value"
               >
                 {{ option.label }}
               </button>
             </div>
           </div>
-          <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
-            <Search :size="17" /> 조회
+          <button class="primary-button compact" type="button" :disabled="peakDashboardLoading" @click="run(loadPeakDashboard)">
+            <Search :size="17" /> {{ peakDashboardLoading ? '로딩 중' : '조회' }}
           </button>
-          <span class="live-pill">{{ peakLivePillLabel }}</span>
+          <span class="live-pill" :class="{ loading: peakDashboardLoading }">
+            {{ peakDashboardLoading ? `${peakPeriodLabel} 데이터 로딩 중` : peakLivePillLabel }}
+          </span>
         </section>
 
-        <section class="peak-kpi-grid">
+        <section class="peak-kpi-grid" :aria-busy="peakDashboardLoading">
+          <template v-if="peakDashboardLoading">
+            <article v-for="index in 4" :key="`peak-kpi-skeleton-${index}`" class="peak-kpi-card peak-kpi-skeleton-card" aria-hidden="true">
+              <span class="peak-skeleton-icon"></span>
+              <div class="peak-skeleton-copy">
+                <span class="peak-skeleton-line short"></span>
+                <span class="peak-skeleton-line value"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+            </article>
+          </template>
+          <template v-else>
           <article class="peak-kpi-card">
             <span class="peak-card-icon blue"><Zap :size="22" /></span>
             <div>
@@ -3135,6 +3193,7 @@ onUnmounted(() => {
               <em>{{ peakPreviousPeriodLabel }} {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
             </div>
           </article>
+          </template>
         </section>
 
         <section class="peak-view-tabs" aria-label="피크 전력 보기">
@@ -3149,7 +3208,86 @@ onUnmounted(() => {
           </button>
         </section>
 
-        <section v-if="activePeakView === 'comparison'" class="peak-comparison-grid">
+        <section v-if="peakDashboardLoading" class="peak-loading-region" role="status" aria-live="polite">
+          <span class="sr-only">{{ peakPeriodLabel }} 피크 전력 데이터를 불러오는 중입니다.</span>
+
+          <section v-if="activePeakView === 'comparison'" class="peak-comparison-grid peak-skeleton-grid" aria-hidden="true">
+            <article class="panel peak-comparison-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-plant-bars peak-skeleton-bars">
+                <div v-for="index in 6" :key="`peak-plant-skeleton-${index}`" class="peak-skeleton-bar-row">
+                  <span class="peak-skeleton-dot"></span>
+                  <span class="peak-skeleton-line name"></span>
+                  <span class="peak-skeleton-track"><i></i></span>
+                  <span class="peak-skeleton-line number"></span>
+                  <span class="peak-skeleton-line percent"></span>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel peak-selected-plant-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-icon small"></span>
+              </div>
+              <div class="peak-selected-summary peak-selected-summary-skeleton">
+                <span class="peak-skeleton-line name"></span>
+                <span class="peak-skeleton-line hero"></span>
+                <span class="peak-skeleton-line medium"></span>
+                <span class="peak-skeleton-line medium"></span>
+                <span class="peak-skeleton-line short"></span>
+              </div>
+            </article>
+          </section>
+
+          <section v-else-if="activePeakView === 'detail'" class="peak-content-grid peak-skeleton-grid" aria-hidden="true">
+            <article class="panel peak-gauge-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line short"></span>
+              </div>
+              <div class="peak-skeleton-gauge"></div>
+              <div class="peak-skeleton-scale">
+                <span></span><span></span><span></span><span></span>
+              </div>
+            </article>
+
+            <article class="panel peak-chart-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-skeleton-chart">
+                <span v-for="index in 5" :key="`peak-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel peak-ranking-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-icon small"></span>
+              </div>
+              <div class="peak-skeleton-ranking">
+                <span v-for="index in 5" :key="`peak-ranking-skeleton-${index}`"></span>
+              </div>
+            </article>
+          </section>
+
+          <article v-else class="panel table-panel peak-history-panel peak-skeleton-panel peak-history-skeleton" aria-hidden="true">
+            <div class="peak-skeleton-title-row">
+              <span class="peak-skeleton-line title"></span>
+              <span class="peak-skeleton-icon small"></span>
+            </div>
+            <div class="peak-skeleton-table">
+              <span v-for="index in 7" :key="`peak-history-skeleton-${index}`"></span>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activePeakView === 'comparison'" class="peak-comparison-grid">
           <article class="panel peak-comparison-panel">
             <div class="panel-title inline">
               <h2>공장별 피크 전력 비교</h2>
@@ -3294,7 +3432,7 @@ onUnmounted(() => {
         <section class="utility-filter-row">
           <label>
             조회일
-            <input v-model="selectedUtilityDate" type="date" />
+            <input v-model="selectedUtilityDate" type="date" :disabled="utilityDashboardLoading" />
           </label>
           <div class="utility-period-control">
             <span>집계 단위</span>
@@ -3304,19 +3442,33 @@ onUnmounted(() => {
                 :key="option.value"
                 type="button"
                 :class="{ active: selectedUtilityPeriod === option.value }"
+                :disabled="utilityDashboardLoading"
                 @click="selectedUtilityPeriod = option.value"
               >
                 {{ option.label }}
               </button>
             </div>
           </div>
-          <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
-            <Search :size="17" /> 조회
+          <button class="primary-button compact" type="button" :disabled="utilityDashboardLoading" @click="run(loadUtilityDashboard)">
+            <Search :size="17" /> {{ utilityDashboardLoading ? '로딩 중' : '조회' }}
           </button>
-          <span class="live-pill">{{ utilityLivePillLabel }}</span>
+          <span class="live-pill" :class="{ loading: utilityDashboardLoading }">
+            {{ utilityDashboardLoading ? `${utilityPeriodLabel} 데이터 로딩 중` : utilityLivePillLabel }}
+          </span>
         </section>
 
-        <section class="utility-kpi-grid">
+        <section class="utility-kpi-grid" :aria-busy="utilityDashboardLoading">
+          <template v-if="utilityDashboardLoading">
+            <article v-for="index in 4" :key="`utility-kpi-skeleton-${index}`" :class="['utility-kpi-card', index <= 2 ? 'gas' : 'water', 'utility-kpi-skeleton-card']" aria-hidden="true">
+              <span class="utility-skeleton-icon"></span>
+              <div class="utility-skeleton-copy">
+                <span class="utility-skeleton-line short"></span>
+                <span class="utility-skeleton-line value"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+            </article>
+          </template>
+          <template v-else>
           <article class="utility-kpi-card gas">
             <span class="utility-card-icon"><Flame :size="23" /></span>
             <div>
@@ -3353,6 +3505,7 @@ onUnmounted(() => {
               <em>이번 달 누적 사용량</em>
             </div>
           </article>
+          </template>
         </section>
 
         <section class="utility-view-tabs" aria-label="가스 용수 보기">
@@ -3367,7 +3520,104 @@ onUnmounted(() => {
           </button>
         </section>
 
-        <section v-if="activeUtilityView === 'comparison'" class="utility-comparison-grid">
+        <section v-if="utilityDashboardLoading" class="utility-loading-region" role="status" aria-live="polite">
+          <span class="sr-only">{{ utilityPeriodLabel }} 가스/용수 데이터를 불러오는 중입니다.</span>
+
+          <section v-if="activeUtilityView === 'comparison'" class="utility-comparison-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel utility-comparison-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-plant-bars">
+                <div v-for="index in 6" :key="`utility-plant-skeleton-${index}`" class="utility-skeleton-plant-row">
+                  <span class="utility-skeleton-line name"></span>
+                  <div>
+                    <span class="utility-skeleton-track gas"><i></i></span>
+                    <span class="utility-skeleton-line number"></span>
+                  </div>
+                  <div>
+                    <span class="utility-skeleton-track water"><i></i></span>
+                    <span class="utility-skeleton-line number"></span>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel utility-selected-plant-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-icon small"></span>
+              </div>
+              <div class="utility-selected-summary utility-selected-summary-skeleton">
+                <span class="utility-skeleton-line name"></span>
+                <article>
+                  <span class="utility-skeleton-line short"></span>
+                  <span class="utility-skeleton-line hero"></span>
+                  <span class="utility-skeleton-line medium"></span>
+                </article>
+                <article>
+                  <span class="utility-skeleton-line short"></span>
+                  <span class="utility-skeleton-line hero"></span>
+                  <span class="utility-skeleton-line medium"></span>
+                </article>
+              </div>
+            </article>
+          </section>
+
+          <section v-else-if="activeUtilityView === 'detail'" class="utility-chart-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel utility-chart-panel gas utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-chart gas">
+                <span v-for="index in 5" :key="`utility-gas-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel utility-chart-panel water utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-chart water">
+                <span v-for="index in 5" :key="`utility-water-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+          </section>
+
+          <section v-else class="utility-bottom-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel table-panel utility-meter-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-icon small"></span>
+              </div>
+              <div class="utility-skeleton-toolbar">
+                <span class="utility-skeleton-line input"></span>
+                <span class="utility-skeleton-line short"></span>
+              </div>
+              <div class="utility-skeleton-table">
+                <span v-for="index in 6" :key="`utility-meter-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel utility-pattern-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-pattern-grid">
+                <span v-for="index in 16" :key="`utility-pattern-skeleton-${index}`" class="utility-skeleton-pattern-cell"></span>
+              </div>
+              <div class="utility-skeleton-scale">
+                <span></span><i></i><span></span>
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section v-else-if="activeUtilityView === 'comparison'" class="utility-comparison-grid">
           <article class="panel utility-comparison-panel">
             <div class="panel-title inline">
               <h2>공장별 가스/용수 사용량 비교</h2>
