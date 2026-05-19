@@ -32,6 +32,7 @@ import com.smartfactory.scada.alarm.mapper.AlarmMapper;
 import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.chatbot.domain.ChatbotMessage;
+import com.smartfactory.scada.chatbot.dto.ChatbotAiResponse;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageRequest;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
@@ -101,8 +102,8 @@ class ChatbotServiceTest {
 			)
 		);
 		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(recentMessages);
-		given(openAiChatbotClient.generateAnswer(eq("status?"), anyString(), eq(recentMessages)))
-			.willReturn(Optional.of("AI generated answer"));
+		given(openAiChatbotClient.generateResponse(eq("status?"), anyString(), eq(recentMessages)))
+			.willReturn(Optional.of(ChatbotAiResponse.answerOnly("AI generated answer")));
 		stubInsertId();
 		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
 
@@ -140,7 +141,7 @@ class ChatbotServiceTest {
 			List.of(facility(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.WARNING))
 		);
 		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
-		given(openAiChatbotClient.generateAnswer(eq("summary"), anyString(), eq(List.of())))
+		given(openAiChatbotClient.generateResponse(eq("summary"), anyString(), eq(List.of())))
 			.willReturn(Optional.empty());
 		stubInsertId();
 		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
@@ -169,8 +170,8 @@ class ChatbotServiceTest {
 		given(esgMapper.findLatestByPlantId(2L)).willReturn(Optional.empty());
 		stubOperationalContext(2L, List.of(), 0L, List.of());
 		given(chatbotMapper.findRecent(100L, 2L, 5)).willReturn(List.of());
-		given(openAiChatbotClient.generateAnswer(eq("summary"), anyString(), eq(List.of())))
-			.willReturn(Optional.of("plant 2 answer"));
+		given(openAiChatbotClient.generateResponse(eq("summary"), anyString(), eq(List.of())))
+			.willReturn(Optional.of(ChatbotAiResponse.answerOnly("plant 2 answer")));
 		stubInsertId();
 		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
 
@@ -215,7 +216,7 @@ class ChatbotServiceTest {
 			List.of(facility(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.RUNNING))
 		);
 		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
-		given(openAiChatbotClient.generateAnswer(eq("summary"), anyString(), eq(List.of())))
+		given(openAiChatbotClient.generateResponse(eq("summary"), anyString(), eq(List.of())))
 			.willReturn(Optional.empty());
 		stubInsertId();
 		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
@@ -237,7 +238,7 @@ class ChatbotServiceTest {
 		given(esgMapper.findLatestByPlantId(1L)).willReturn(Optional.empty());
 		stubOperationalContext(1L, List.of(), 0L, List.of(), List.of(), List.of());
 		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
-		given(openAiChatbotClient.generateAnswer(eq("summary"), anyString(), eq(List.of())))
+		given(openAiChatbotClient.generateResponse(eq("summary"), anyString(), eq(List.of())))
 			.willReturn(Optional.empty());
 		stubInsertId();
 		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());

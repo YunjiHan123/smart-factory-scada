@@ -12,6 +12,9 @@ public record ChatbotMessageResponse(
 	String question,
 	String answer,
 	String referencedData,
+	String chartSpec,
+	String imageDataUrl,
+	String externalSources,
 	LocalDateTime createdAt
 ) {
 
@@ -24,6 +27,9 @@ public record ChatbotMessageResponse(
 			message.getQuestion(),
 			message.getAnswer(),
 			message.getReferencedData(),
+			message.getChartSpec(),
+			message.getImageDataUrl(),
+			message.getExternalSources(),
 			message.getCreatedAt()
 		);
 	}

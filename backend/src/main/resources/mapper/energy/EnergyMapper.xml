@@ -1034,7 +1034,7 @@
                 lf.plant_name,
                 COALESCE(pp.period_peak_kw, 0) AS period_peak_kw,
                 COALESCE(pp.period_average_kw, 0) AS period_average_kw,
-                ROUND(#{facilityThresholdKw} * GREATEST(lf.facility_count, 1), 2) AS threshold_kw
+                ROUND(#{facilityThresholdKw}, 2) AS threshold_kw
             FROM line_facilities lf
             LEFT JOIN plant_period pp ON pp.plant_id = lf.plant_id
         )

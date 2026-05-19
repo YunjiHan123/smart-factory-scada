@@ -180,6 +180,9 @@ CREATE TABLE chatbot_messages (
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     referenced_data JSON,
+    chart_spec JSON,
+    image_data LONGTEXT,
+    external_sources JSON,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_chatbot_user

@@ -16,5 +16,8 @@ public class ChatbotMessage {
 	private String question;
 	private String answer;
 	private String referencedData;
+	private String chartSpec;
+	private String imageDataUrl;
+	private String externalSources;
 	private LocalDateTime createdAt;
 }

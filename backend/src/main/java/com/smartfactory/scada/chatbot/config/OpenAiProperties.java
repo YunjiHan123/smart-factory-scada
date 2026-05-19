@@ -17,6 +17,10 @@ public class OpenAiProperties {
 	private String baseUrl = "https://api.openai.com/v1";
 	private int timeoutSeconds = 10;
 	private int maxOutputTokens = 600;
+	private boolean webSearchEnabled = true;
+	private boolean imageGenerationEnabled = true;
+	private boolean fileSearchEnabled = true;
+	private String vectorStoreId = "";
 
 	public boolean hasApiKey() {
 		return apiKey != null && !apiKey.isBlank();
@@ -35,5 +39,9 @@ public class OpenAiProperties {
 
 	public int maxOutputTokens() {
 		return maxOutputTokens <= 0 ? 600 : maxOutputTokens;
+	}
+
+	public boolean hasVectorStoreId() {
+		return vectorStoreId != null && !vectorStoreId.isBlank();
 	}
 }

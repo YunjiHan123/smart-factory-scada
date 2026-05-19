@@ -21,7 +21,7 @@ class OpenAiChatbotClientTest {
 	void setUp() {
 		OpenAiProperties properties = new OpenAiProperties();
 		objectMapper = new ObjectMapper();
-		client = new OpenAiChatbotClient(properties, RestClient.builder());
+		client = new OpenAiChatbotClient(properties, RestClient.builder(), objectMapper);
 	}
 
 	@Test

@@ -162,6 +162,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  signup: (payload) =>
+    apiFetch('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   logout: () => apiFetch('/api/auth/logout', { method: 'POST' }),
   me: () => apiFetch('/api/users/me'),
   plants: () => apiFetch('/api/plants'),
@@ -180,10 +185,16 @@ export const api = {
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
   esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),
+  updateUser: (userId, payload) =>
+    apiFetch(`/api/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   chatbotMessages: (params) => apiFetch(`/api/chatbot/messages${toQuery(params)}`),
   askChatbot: (payload) =>
     apiFetch('/api/chatbot/messages', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  deleteChatbotMessage: (messageId) => apiFetch(`/api/chatbot/messages/${messageId}`, { method: 'DELETE' }),
 }

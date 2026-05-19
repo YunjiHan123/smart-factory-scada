@@ -6,7 +6,9 @@ import jakarta.validation.Valid;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -46,5 +48,14 @@ public class ChatbotController {
 		@RequestParam(required = false) Integer limit
 	) {
 		return chatbotService.getRecent(authenticatedUser, plantId, limit);
+	}
+
+	@DeleteMapping("/{messageId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deleteMessage(
+		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
+		@PathVariable Long messageId
+	) {
+		chatbotService.deleteMessage(authenticatedUser, messageId);
 	}
 }

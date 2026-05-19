@@ -59,8 +59,9 @@ import lombok.RequiredArgsConstructor;
 public class EnergyService {
 
 	private static final int DEFAULT_LIMIT = 100;
-	private static final int MAX_LIMIT = 500;
+	private static final int MAX_LIMIT = 5000;
 	private static final BigDecimal FACILITY_PEAK_THRESHOLD_KW = BigDecimal.valueOf(1400);
+	private static final BigDecimal PLANT_PEAK_THRESHOLD_KW = BigDecimal.valueOf(8500);
 	private static final BigDecimal ELECTRICITY_WARNING_DELTA = BigDecimal.valueOf(80);
 	private static final BigDecimal ELECTRICITY_CRITICAL_DELTA = BigDecimal.valueOf(130);
 	private static final BigDecimal GAS_WARNING_DELTA = BigDecimal.valueOf(8);
@@ -161,7 +162,7 @@ public class EnergyService {
 		List<PeakPowerPlantComparison> plantComparison = energyMapper.findPeakPowerPlantComparison(
 			from,
 			to,
-			FACILITY_PEAK_THRESHOLD_KW
+			PLANT_PEAK_THRESHOLD_KW
 		);
 
 		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
@@ -269,14 +270,12 @@ public class EnergyService {
 			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
 		}
 
-		LocalDate requestedDate = targetDate == null ? LocalDate.now() : targetDate;
 		EnergyType resolvedEnergyType = energyType == null ? EnergyType.ELECTRICITY : energyType;
-		LocalDate usageDate = energyMapper.findFacilityLineSummaryDate(plantId, facilityType, requestedDate)
-			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType)
-				.filter(requestedDate::equals))
-			.or(() -> energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType))
-			.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType))
-			.orElse(requestedDate);
+		LocalDate usageDate = targetDate == null
+			? energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType)
+				.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType))
+				.orElse(LocalDate.now())
+			: targetDate;
 		LocalDateTime usageTo = usageDate.equals(LocalDate.now())
 			? LocalDateTime.now()
 			: usageDate.plusDays(1).atStartOfDay();
@@ -577,13 +576,7 @@ public class EnergyService {
 	}
 
 	private BigDecimal peakThresholdForPlant(Long plantId) {
-		long facilityCount = facilityMapper.findByPlantId(plantId).stream()
-			.filter(facility -> isLineFacility(facility.getId(), plantId))
-			.count();
-		if (facilityCount <= 0) {
-			return FACILITY_PEAK_THRESHOLD_KW;
-		}
-		return FACILITY_PEAK_THRESHOLD_KW.multiply(BigDecimal.valueOf(facilityCount));
+		return PLANT_PEAK_THRESHOLD_KW;
 	}
 
 	private boolean isLineFacility(Long facilityId, Long plantId) {
