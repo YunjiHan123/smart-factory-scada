@@ -971,6 +971,88 @@ input {
   max-height: 304px;
 }
 
+.alarm-skeleton-line,
+.alarm-skeleton-sort span,
+.alarm-skeleton-tabs span,
+.alarm-skeleton-table span {
+  background: linear-gradient(90deg, #edf3fb 0%, #f8fbff 48%, #e4edf9 100%);
+  background-size: 220% 100%;
+  animation: peak-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.alarm-skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.alarm-skeleton-line.title {
+  width: min(180px, 42%);
+  height: 20px;
+}
+
+.alarm-skeleton-line.heading {
+  width: min(220px, 55%);
+  height: 18px;
+}
+
+.alarm-skeleton-line.count {
+  width: 54px;
+}
+
+.alarm-skeleton-sort {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.alarm-skeleton-sort span {
+  width: 86px;
+  height: 34px;
+  border-right: 1px solid var(--line);
+}
+
+.alarm-skeleton-sort span:last-child {
+  border-right: 0;
+}
+
+.alarm-skeleton-tabs,
+.alarm-skeleton-table {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.alarm-skeleton-tabs {
+  overflow: hidden;
+}
+
+.alarm-skeleton-tabs span {
+  min-height: 46px;
+  border-bottom: 1px solid var(--line);
+}
+
+.alarm-skeleton-tabs span:last-child {
+  border-bottom: 0;
+}
+
+.alarm-skeleton-table {
+  gap: 10px;
+  padding: 10px;
+  background: #fff;
+}
+
+.alarm-skeleton-table span {
+  min-height: 38px;
+  border-radius: 7px;
+}
+
+.alarm-skeleton-table span:first-child {
+  background: #f0f4f9;
+}
+
 th,
 td {
   padding: 11px 12px;
@@ -3846,6 +3928,184 @@ td {
   font-weight: 800;
 }
 
+.esg-loading-region {
+  display: grid;
+  gap: 14px;
+}
+
+.esg-skeleton-icon,
+.esg-skeleton-line,
+.esg-skeleton-map,
+.esg-skeleton-map span,
+.esg-skeleton-ranking span,
+.esg-skeleton-grouped-chart span,
+.esg-skeleton-detail-list span {
+  background: linear-gradient(90deg, #edf3fb 0%, #f8fbff 48%, #e4edf9 100%);
+  background-size: 220% 100%;
+  animation: peak-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.esg-kpi-skeleton-card {
+  align-items: flex-start;
+}
+
+.esg-kpi-skeleton-card.grade {
+  border-top: 4px solid var(--green);
+}
+
+.esg-skeleton-icon {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+}
+
+.esg-skeleton-icon.small {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+.esg-skeleton-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.esg-skeleton-line {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.esg-skeleton-line.short {
+  width: 42%;
+}
+
+.esg-skeleton-line.medium {
+  width: 64%;
+}
+
+.esg-skeleton-line.value {
+  width: 72%;
+  height: 30px;
+}
+
+.esg-skeleton-line.title {
+  width: min(240px, 56%);
+  height: 18px;
+}
+
+.esg-skeleton-panel {
+  min-height: 100%;
+}
+
+.esg-skeleton-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.esg-skeleton-map {
+  position: relative;
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid #dce5f2;
+  border-radius: 8px;
+}
+
+.esg-skeleton-map span {
+  position: absolute;
+  width: 112px;
+  height: 48px;
+  border-radius: 8px;
+  border: 1px solid rgba(207, 224, 245, 0.9);
+}
+
+.esg-skeleton-map span:nth-child(1) {
+  left: 4%;
+  top: 12%;
+}
+
+.esg-skeleton-map span:nth-child(2) {
+  left: 4%;
+  top: 42%;
+}
+
+.esg-skeleton-map span:nth-child(3) {
+  left: 4%;
+  top: 68%;
+}
+
+.esg-skeleton-map span:nth-child(4) {
+  right: 4%;
+  top: 12%;
+}
+
+.esg-skeleton-map span:nth-child(5) {
+  right: 4%;
+  top: 42%;
+}
+
+.esg-skeleton-map span:nth-child(6) {
+  right: 4%;
+  top: 68%;
+}
+
+.esg-skeleton-map::after {
+  content: "";
+  position: absolute;
+  inset: 58px 35% 48px;
+  border-radius: 48% 52% 46% 54%;
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  transform: rotate(-14deg);
+}
+
+.esg-skeleton-ranking,
+.esg-skeleton-detail-list {
+  display: grid;
+  gap: 10px;
+}
+
+.esg-skeleton-ranking span {
+  min-height: 46px;
+  border-radius: 8px;
+}
+
+.esg-skeleton-grouped-chart {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(40px, 1fr));
+  align-items: end;
+  min-height: 270px;
+  gap: 18px;
+  padding: 18px 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.esg-skeleton-grouped-chart span {
+  min-height: 64px;
+  border-radius: 8px 8px 0 0;
+}
+
+.esg-skeleton-grouped-chart span:nth-child(2n) {
+  min-height: 132px;
+}
+
+.esg-skeleton-grouped-chart span:nth-child(3n) {
+  min-height: 194px;
+}
+
+.esg-skeleton-detail-list span {
+  min-height: 54px;
+  border-radius: 8px;
+}
+
 .esg-main-grid,
 .esg-bottom-grid {
   display: grid;
@@ -4688,6 +4948,51 @@ td {
   overflow-x: auto;
 }
 
+.users-page .table-panel .panel-title span {
+  flex: 0 0 auto;
+}
+
+.user-skeleton-table,
+.user-skeleton-form {
+  display: grid;
+  gap: 10px;
+}
+
+.user-skeleton-table {
+  min-width: 680px;
+  padding-top: 6px;
+}
+
+.user-skeleton-table span,
+.user-skeleton-form span {
+  background: linear-gradient(90deg, #edf3fb 0%, #f8fbff 48%, #e4edf9 100%);
+  background-size: 220% 100%;
+  animation: peak-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.user-skeleton-table span {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.user-skeleton-table span:first-of-type {
+  min-height: 38px;
+  background: #f0f4f9;
+}
+
+.user-skeleton-form span {
+  min-height: 42px;
+  border: 1px solid #cad7ea;
+  border-radius: 7px;
+}
+
+.user-skeleton-form span.button {
+  min-height: 44px;
+  margin-top: 4px;
+  background: linear-gradient(90deg, #dbeafe 0%, #eff6ff 48%, #cfe0ff 100%);
+}
+
 .user-create-panel {
   display: grid;
   gap: 16px;
@@ -4846,7 +5151,20 @@ td {
   .utility-skeleton-table span,
   .utility-skeleton-pattern-cell,
   .utility-skeleton-scale span,
-  .utility-skeleton-scale i {
+  .utility-skeleton-scale i,
+  .esg-skeleton-icon,
+  .esg-skeleton-line,
+  .esg-skeleton-map,
+  .esg-skeleton-map span,
+  .esg-skeleton-ranking span,
+  .esg-skeleton-grouped-chart span,
+  .esg-skeleton-detail-list span,
+  .user-skeleton-table span,
+  .user-skeleton-form span,
+  .alarm-skeleton-line,
+  .alarm-skeleton-sort span,
+  .alarm-skeleton-tabs span,
+  .alarm-skeleton-table span {
     animation: none;
   }
 }
