@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   Activity,
   AlertTriangle,
@@ -23,6 +23,7 @@ import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'scada' : 'login')
 const SCADA_EXTERNAL_URL = 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
+const KAKAO_MAP_APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY
 const activePage = ref('facility')
 const loading = ref(false)
 const errorMessage = ref('')
@@ -42,6 +43,11 @@ const chatbotSending = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
+const esgMapElement = ref(null)
+const esgMapState = reactive({
+  status: KAKAO_MAP_APP_KEY ? 'idle' : 'missing-key',
+  message: KAKAO_MAP_APP_KEY ? '' : 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.',
+})
 const syncingSelection = ref(false)
 let energySocket = null
 let energySocketReconnectTimer = null
@@ -49,6 +55,10 @@ let energyPollTimer = null
 let latestEnergyPollInFlight = false
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
+let esgMapScriptPromise = null
+let esgKakaoMap = null
+let esgKakaoMarkers = []
+let esgKakaoOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
 let lastAlarmRefreshAt = 0
@@ -56,6 +66,14 @@ const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
 const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
+const DEFAULT_PLANT_LOCATIONS = {
+  1: { plantName: '기아 화성', latitude: 37.021559, longitude: 126.783111 },
+  2: { plantName: '기아 광명', latitude: 37.430203, longitude: 126.878945 },
+  3: { plantName: '기아 광주', latitude: 35.160108, longitude: 126.882618 },
+  4: { plantName: '현대 울산', latitude: 35.538377, longitude: 129.376513 },
+  5: { plantName: '현대 아산', latitude: 36.838508, longitude: 126.881593 },
+  6: { plantName: '현대 전주', latitude: 35.956543, longitude: 127.134506 },
+}
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
@@ -651,11 +669,166 @@ function esgTrendClass(value, inverse = false) {
   return good ? 'down' : 'up'
 }
 
-function esgPlantMapStyle(index) {
-  const position = esgMapPositions[index % esgMapPositions.length]
-  return {
-    left: `${position.left}%`,
-    top: `${position.top}%`,
+function plantIdentifier(plant) {
+  const value = plant?.plantId ?? plant?.plant_id ?? plant?.id
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function loadKakaoMapsScript() {
+  if (!KAKAO_MAP_APP_KEY) {
+    return Promise.reject(new Error('Kakao Maps API key is missing.'))
+  }
+
+  if (window.kakao?.maps) {
+    return new Promise((resolve) => window.kakao.maps.load(resolve))
+  }
+
+  if (!esgMapScriptPromise) {
+    esgMapScriptPromise = new Promise((resolve, reject) => {
+      const existingScript = document.getElementById('kakao-maps-sdk')
+      if (existingScript) {
+        existingScript.addEventListener('load', () => {
+          if (window.kakao?.maps) {
+            window.kakao.maps.load(resolve)
+          } else {
+            reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
+          }
+        }, { once: true })
+        existingScript.addEventListener('error', reject, { once: true })
+        return
+      }
+
+      const script = document.createElement('script')
+      script.id = 'kakao-maps-sdk'
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_MAP_APP_KEY}&autoload=false`
+      script.async = true
+      script.onload = () => {
+        if (window.kakao?.maps) {
+          window.kakao.maps.load(resolve)
+        } else {
+          reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
+        }
+      }
+      script.onerror = () => reject(new Error('Kakao Maps SDK could not be loaded.'))
+      document.head.appendChild(script)
+    })
+  }
+
+  return esgMapScriptPromise
+}
+
+function clearEsgMapMarkers() {
+  esgKakaoMarkers.forEach(({ marker }) => marker.setMap(null))
+  esgKakaoOverlays.forEach((overlay) => overlay.setMap(null))
+  esgKakaoMarkers = []
+  esgKakaoOverlays = []
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function esgMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+  return `
+    <div class="esg-map-label${active ? ' active' : ''}">
+      <strong class="${esgGradeClass(plant.grade)}">${escapeHtml(plant.grade || '-')}</strong>
+      <span>${escapeHtml(plant.plantName || '-')}</span>
+    </div>
+  `
+}
+
+async function renderEsgKakaoMap() {
+  if (activePage.value !== 'esg') {
+    return
+  }
+
+  await nextTick()
+  const plants = esgMapPlants.value
+
+  if (!KAKAO_MAP_APP_KEY) {
+    esgMapState.status = 'missing-key'
+    esgMapState.message = 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.'
+    return
+  }
+
+  const container = esgMapElement.value
+  if (!container) {
+    return
+  }
+
+  if (!plants.length) {
+    esgMapState.status = 'empty'
+    esgMapState.message = '좌표가 있는 사업장 데이터가 없습니다.'
+    clearEsgMapMarkers()
+    return
+  }
+
+  esgMapState.status = 'loading'
+  esgMapState.message = '지도를 불러오는 중입니다.'
+
+  try {
+    await loadKakaoMapsScript()
+    const maps = window.kakao.maps
+    const center = new maps.LatLng(36.4, 127.9)
+
+    if (!esgKakaoMap) {
+      esgKakaoMap = new maps.Map(container, {
+        center,
+        level: plants.length > 1 ? 12 : 8,
+      })
+    } else {
+      esgKakaoMap.setCenter(center)
+    }
+
+    clearEsgMapMarkers()
+    const bounds = new maps.LatLngBounds()
+
+    plants.forEach((plant) => {
+      const position = new maps.LatLng(Number(plant.latitude), Number(plant.longitude))
+      bounds.extend(position)
+      const marker = new maps.Marker({
+        map: esgKakaoMap,
+        position,
+        title: plant.plantName,
+      })
+
+      maps.event.addListener(marker, 'click', () => {
+        selectedPlantId.value = plant.plantId
+      })
+
+      const overlay = new maps.CustomOverlay({
+        content: esgMapOverlayContent(plant),
+        position,
+        xAnchor: 0.5,
+        yAnchor: 2.45,
+        zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
+      })
+      overlay.setMap(esgKakaoMap)
+
+      esgKakaoMarkers.push({ marker, plant })
+      esgKakaoOverlays.push(overlay)
+    })
+
+    if (plants.length > 1) {
+      esgKakaoMap.setBounds(bounds, 28, 28, 28, 28)
+    } else {
+      esgKakaoMap.setLevel(8)
+    }
+
+    esgMapState.status = 'ready'
+    esgMapState.message = ''
+  } catch (error) {
+    console.error(error)
+    clearEsgMapMarkers()
+    esgMapState.status = 'error'
+    esgMapState.message = '지도를 불러오지 못했습니다. API 키와 도메인 설정을 확인해 주세요.'
   }
 }
 
@@ -894,6 +1067,103 @@ const selectedEsgPlant = computed(
     esgPlants.value[0] ||
     null,
 )
+const esgMapPlants = computed(() => {
+  const plantLocations = new Map(state.plants.map((plant) => [plantIdentifier(plant), plant]))
+  const esgPlantScores = new Map(esgPlants.value.map((plant) => [plantIdentifier(plant), plant]))
+  const defaultLocationByName = new Map(
+    Object.entries(DEFAULT_PLANT_LOCATIONS).map(([plantId, location]) => [location.plantName, { plantId: Number(plantId), ...location }]),
+  )
+  const normalizePlant = (plant) => {
+    const plantId = plantIdentifier(plant)
+    const plantName = plant?.plantName ?? plant?.plant_name ?? plant?.name
+    const location = plantLocations.get(plantId) || DEFAULT_PLANT_LOCATIONS[plantId] || defaultLocationByName.get(plantName) || {}
+    return {
+      ...plant,
+      plantId: plantId || location.plantId,
+      plantName: plantName || location.plantName || location.name,
+      latitude: plant?.latitude ?? plant?.lat ?? location.latitude,
+      longitude: plant?.longitude ?? plant?.lng ?? location.longitude,
+    }
+  }
+  const mergedPlantIds = new Set([
+    ...esgPlants.value.map(plantIdentifier).filter((plantId) => plantId != null),
+    ...state.plants.map(plantIdentifier).filter((plantId) => plantId != null),
+  ])
+  const mergedPlants = [...mergedPlantIds].map((plantId) => normalizePlant({
+    ...plantLocations.get(plantId),
+    ...esgPlantScores.get(plantId),
+  }))
+
+  const sourcePlants = mergedPlants.length
+    ? mergedPlants
+    : state.plants.map((plant) => normalizePlant({
+      ...plant,
+      grade: '-',
+      totalScore: null,
+    }))
+
+  return sourcePlants.filter((plant) =>
+    Number.isFinite(Number(plant.latitude)) && Number.isFinite(Number(plant.longitude)),
+  )
+})
+const esgSchematicMap = computed(() => {
+  const plants = esgMapPlants.value
+  if (!plants.length) {
+    return []
+  }
+
+  const sortedPlants = [...plants].sort((left, right) =>
+    Number(left.rank || 99) - Number(right.rank || 99) ||
+    String(left.plantName || '').localeCompare(String(right.plantName || ''), 'ko'),
+  )
+  const leftSlots = [
+    { left: 2.4, top: 10 },
+    { left: 2.4, top: 35 },
+    { left: 2.4, top: 60 },
+  ]
+  const rightSlots = [
+    { left: 76.4, top: 10 },
+    { left: 76.4, top: 35 },
+    { left: 76.4, top: 60 },
+  ]
+  const half = Math.ceil(sortedPlants.length / 2)
+
+  return sortedPlants.map((plant, index) => {
+    const normalizedLng = Math.max(0, Math.min((Number(plant.longitude) - 125.6) / (129.9 - 125.6), 1))
+    const normalizedLat = Math.max(0, Math.min((Number(plant.latitude) - 34.6) / (38.3 - 34.6), 1))
+    const pinX = 38 + normalizedLng * 30
+    const pinY = 17 + (1 - normalizedLat) * 62
+    const side = index < half ? 'left' : 'right'
+    const slot = side === 'left' ? leftSlots[index % leftSlots.length] : rightSlots[(index - half) % rightSlots.length]
+
+    return {
+      plant,
+      side,
+      cardStyle: {
+        left: `${slot.left}%`,
+        top: `${slot.top}%`,
+      },
+      pinStyle: {
+        left: `${pinX}%`,
+        top: `${pinY}%`,
+      },
+    }
+  })
+})
+
+function esgGradeClass(grade) {
+  if (['AAA', 'AA', 'A'].includes(grade)) {
+    return 'good'
+  }
+  if (['BBB', 'BB'].includes(grade)) {
+    return 'watch'
+  }
+  return 'risk'
+}
+
+function esgSchematicScore(plant) {
+  return plant.totalScore == null ? '-' : formatNumber(plant.totalScore)
+}
 const esgMetrics = computed(() => {
   const plant = selectedEsgPlant.value
   if (!plant) {
@@ -966,15 +1236,6 @@ const esgCompareRows = computed(() =>
     scores: [plant.carbonScore, plant.waterScore, plant.solarScore, plant.peakScore].map((score) => Number(score || 0)),
   })),
 )
-const esgMapPositions = [
-  { left: 24, top: 20 },
-  { left: 58, top: 26 },
-  { left: 42, top: 44 },
-  { left: 70, top: 54 },
-  { left: 31, top: 66 },
-  { left: 56, top: 74 },
-]
-
 function buildScadaExternalUrl(userName) {
   const url = new URL(SCADA_EXTERNAL_URL)
   if (userName) {
@@ -1519,6 +1780,7 @@ async function loadEsgDashboard() {
     plantId: selectedPlantId.value || undefined,
     ...dateRangeParams(range.from, range.to),
   })
+  await renderEsgKakaoMap()
 }
 
 async function loadLatestEnergy() {
@@ -1820,6 +2082,12 @@ watch(selectedEsgMonth, () => {
   }
 })
 
+watch([selectedEsgPlant, esgMapPlants, activePage], () => {
+  if (appMode.value !== 'login' && activePage.value === 'esg') {
+    renderEsgKakaoMap()
+  }
+}, { flush: 'post' })
+
 onMounted(() => {
   applyRoute()
   window.addEventListener('hashchange', applyRoute)
@@ -1832,6 +2100,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopEnergyWebSocket()
   stopEnergyPolling()
+  clearEsgMapMarkers()
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
   window.removeEventListener('hashchange', applyRoute)
@@ -2568,18 +2837,69 @@ onUnmounted(() => {
               <h2>사업장 환경 등급 현황</h2>
               <span>{{ selectedEsgFrom }} - {{ selectedEsgTo }}</span>
             </div>
-            <div class="esg-map">
+            <div class="esg-map-shell">
               <div
-                v-for="(plant, index) in esgPlants"
-                :key="plant.plantId"
-                class="esg-map-pin"
-                :class="{ active: plant.plantId === selectedEsgPlant?.plantId }"
-                :style="esgPlantMapStyle(index)"
-              >
-                <Factory :size="17" />
-                <strong>{{ plant.grade }}</strong>
-                <span>{{ plant.plantName }}</span>
-                <b>{{ formatNumber(plant.totalScore) }}</b>
+                ref="esgMapElement"
+                class="esg-map"
+                :class="{ hidden: esgMapState.status === 'fallback' }"
+                aria-label="사업장 ESG 지도"
+              ></div>
+              <div v-if="esgMapState.status === 'fallback'" class="esg-schematic-map" aria-label="사업장 ESG 지도">
+                <svg class="esg-korea-shape" viewBox="0 0 100 100" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="esgMapLand" x1="0" x2="1" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#eff6ff" />
+                      <stop offset="55%" stop-color="#dcfce7" />
+                      <stop offset="100%" stop-color="#cffafe" />
+                    </linearGradient>
+                    <filter id="esgMapGlow">
+                      <feGaussianBlur stdDeviation="1.8" result="blur" />
+                      <feMerge>
+                        <feMergeNode in="blur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <path
+                    class="esg-korea-mainland"
+                    d="M51 5 C58 7 63 11 66 18 C70 25 77 27 75 36 C73 45 79 51 75 59 C71 67 62 69 61 78 C60 88 49 94 41 88 C35 84 34 74 38 67 C42 59 37 54 39 47 C41 40 35 33 39 26 C43 18 44 10 51 5 Z"
+                  />
+                  <path
+                    class="esg-korea-coastline"
+                    d="M36 38 C30 43 25 48 20 55 C16 61 12 70 17 76 C23 83 33 78 38 72"
+                  />
+                  <ellipse class="esg-korea-island" cx="31" cy="88" rx="8" ry="3.8" />
+                </svg>
+                <button
+                  v-for="marker in esgSchematicMap"
+                  :key="marker.plant.plantId"
+                  type="button"
+                  class="esg-schematic-card"
+                  :class="{ active: Number(marker.plant.plantId) === Number(selectedEsgPlant?.plantId) }"
+                  :style="marker.cardStyle"
+                  @click="selectedPlantId = marker.plant.plantId"
+                >
+                  <span>{{ marker.plant.plantName }}</span>
+                  <strong :class="esgGradeClass(marker.plant.grade)">{{ marker.plant.grade || '-' }}</strong>
+                  <b>{{ esgSchematicScore(marker.plant) }}</b>
+                </button>
+                <button
+                  v-for="marker in esgSchematicMap"
+                  :key="`pin-${marker.plant.plantId}`"
+                  type="button"
+                  class="esg-schematic-pin"
+                  :class="{ active: Number(marker.plant.plantId) === Number(selectedEsgPlant?.plantId) }"
+                  :style="marker.pinStyle"
+                  @click="selectedPlantId = marker.plant.plantId"
+                  :aria-label="`${marker.plant.plantName} ${marker.plant.grade || ''}`"
+                >
+                  <i></i>
+                </button>
+              </div>
+              <div v-if="!['ready', 'fallback'].includes(esgMapState.status)" class="esg-map-state">
+                <Factory :size="22" />
+                <strong>{{ esgMapState.message }}</strong>
+                <span v-if="esgMapState.status === 'missing-key'">frontend/.env에 VITE_KAKAO_MAP_APP_KEY를 추가해 주세요.</span>
               </div>
             </div>
           </article>
