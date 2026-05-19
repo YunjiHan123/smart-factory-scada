@@ -25,8 +25,13 @@ import {
   Zap,
 } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
+import brandLogoUrl from './assets/6esgpulse-logo.png'
 
 const appMode = ref(getAccessToken() ? 'detail' : 'login')
+const PLATFORM_NAME = '6ESGPulse'
+const PLATFORM_AI_NAME = '6ESGPulse AI'
+const PLATFORM_TAGLINE = '6개 사업장의 에너지와 ESG 상태를 하나로 읽는 통합 관제 플랫폼'
+const BRAND_MARK_URL = '/favicon.svg'
 const SCADA_EXTERNAL_URL = import.meta.env.VITE_SMWP_SCADA_URL || 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 const activePage = ref('dashboard')
@@ -151,8 +156,8 @@ const nowLabel = computed(() =>
 )
 
 const loginForm = reactive({
-  email: 'admin@scada.com',
-  password: 'Password123!',
+  email: '',
+  password: '',
 })
 
 const userCreateForm = reactive({
@@ -3168,8 +3173,12 @@ onUnmounted(() => {
   <main v-if="appMode === 'login'" class="login-shell">
     <section class="login-page">
       <article class="login-visual">
-        <p>Smart Factory SCADA</p>
-        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다.</h2>
+        <div class="login-brand">
+          <img :src="brandLogoUrl" :alt="`${PLATFORM_NAME} logo`" />
+          <span>{{ PLATFORM_NAME }}</span>
+        </div>
+        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다</h2>
+        <p class="login-tagline">{{ PLATFORM_TAGLINE }}</p>
         <div class="login-lines"></div>
       </article>
       <form class="login-card" @submit.prevent="login">
@@ -3187,7 +3196,7 @@ onUnmounted(() => {
   <main v-else-if="appMode === 'scada'" class="scada-dashboard">
     <header class="scada-top">
       <div>
-        <p>Web SCADA</p>
+        <p>{{ PLATFORM_NAME }} Live</p>
         <h1>에너지 종합 현황</h1>
       </div>
       <div class="scada-top-actions">
@@ -3310,8 +3319,10 @@ onUnmounted(() => {
   <main v-else class="detail-shell">
     <aside class="sidebar">
       <button class="logo-button" type="button" @click="goScada">
-        <span class="logo-symbol">SF</span>
-        <b>SCADA</b>
+        <span class="logo-symbol brand-logo-mark">
+          <img :src="BRAND_MARK_URL" alt="" aria-hidden="true" />
+        </span>
+        <b>{{ PLATFORM_NAME }}</b>
       </button>
       <nav class="side-nav" aria-label="상세 화면">
         <button
@@ -3352,7 +3363,7 @@ onUnmounted(() => {
         <article class="dashboard-map-panel">
           <div class="dashboard-map-head">
             <div>
-              <span>SMWP Network</span>
+              <span>{{ PLATFORM_NAME }} Network</span>
               <h2>사업장 환경종합 현황도</h2>
             </div>
             <b>{{ dashboardPlants.length }}개 사업장</b>
@@ -4619,7 +4630,7 @@ onUnmounted(() => {
                 <div class="chatbot-bubble assistant">
                   <span>
                     <Bot :size="16" />
-                    {{ message.plantName || selectedPlant?.name || 'SCADA AI' }}
+                    {{ message.plantName || selectedPlant?.name || PLATFORM_AI_NAME }}
                     <small>{{ formatDateTime(message.createdAt) }}</small>
                     <button
                       class="chatbot-delete-button"
@@ -4926,14 +4937,14 @@ onUnmounted(() => {
         <section class="solution-frame">
           <header>
             <div>
-              <span>SMWP Solution</span>
+              <span>{{ PLATFORM_NAME }} Solution</span>
               <h2>{{ solutionViewer.plant?.plantName || solutionViewer.plant?.name || '사업장 솔루션' }}</h2>
             </div>
             <button class="icon-button" type="button" aria-label="솔루션 화면 닫기" @click="closePlantSolution">×</button>
           </header>
           <iframe
             :src="solutionViewer.url"
-            title="SMWP solution"
+            :title="`${PLATFORM_NAME} solution`"
             referrerpolicy="no-referrer-when-downgrade"
           ></iframe>
         </section>
