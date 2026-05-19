@@ -1,0 +1,44 @@
+USE scada;
+
+INSERT INTO facilities (id, plant_id, name, facility_type, status)
+SELECT
+    p.id * 10000 + e.seq AS id,
+    p.id AS plant_id,
+    CONCAT('F-', LPAD(e.seq, 3, '0')) AS name,
+    e.facility_type,
+    CASE
+        WHEN e.seq IN (6, 12, 18, 24) THEN 'WARNING'
+        ELSE 'RUNNING'
+    END AS status
+FROM plants p
+JOIN (
+    SELECT 1 AS seq, 'PRESS' AS facility_type
+    UNION ALL SELECT 2, 'PRESS'
+    UNION ALL SELECT 3, 'PRESS'
+    UNION ALL SELECT 4, 'PRESS'
+    UNION ALL SELECT 5, 'PRESS'
+    UNION ALL SELECT 6, 'PRESS'
+    UNION ALL SELECT 7, 'BODY'
+    UNION ALL SELECT 8, 'BODY'
+    UNION ALL SELECT 9, 'BODY'
+    UNION ALL SELECT 10, 'BODY'
+    UNION ALL SELECT 11, 'BODY'
+    UNION ALL SELECT 12, 'BODY'
+    UNION ALL SELECT 13, 'ASSEMBLY'
+    UNION ALL SELECT 14, 'ASSEMBLY'
+    UNION ALL SELECT 15, 'ASSEMBLY'
+    UNION ALL SELECT 16, 'ASSEMBLY'
+    UNION ALL SELECT 17, 'ASSEMBLY'
+    UNION ALL SELECT 18, 'ASSEMBLY'
+    UNION ALL SELECT 19, 'PAINT'
+    UNION ALL SELECT 20, 'PAINT'
+    UNION ALL SELECT 21, 'PAINT'
+    UNION ALL SELECT 22, 'PAINT'
+    UNION ALL SELECT 23, 'PAINT'
+    UNION ALL SELECT 24, 'PAINT'
+) e
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM facilities f
+    WHERE f.id = p.id * 10000 + e.seq
+);
