@@ -1,16 +1,18 @@
 package com.smartfactory.scada.energy.domain;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 public final class ElectricityTariffRegistry {
 
 	public static final ElectricityTariffCode DEFAULT_TARIFF_CODE = ElectricityTariffCode.HIGH_VOLTAGE_A_OPTION_II;
-	public static final String SOURCE = "사용자 첨부 한전 산업용전력(을) 요금표";
+	public static final String SOURCE = "사용자 첨부 한전 산업용전력(을) 요금표 v1";
 
-	private static final Map<ElectricityTariffCode, ElectricityTariffPlan> PLANS = plans();
+	private static final Map<ElectricityTariffCode, ElectricityTariffPlan> PLANS = buildPlans();
 
 	private ElectricityTariffRegistry() {
 	}
@@ -26,7 +28,13 @@ public final class ElectricityTariffRegistry {
 		return Optional.ofNullable(PLANS.get(code));
 	}
 
-	private static Map<ElectricityTariffCode, ElectricityTariffPlan> plans() {
+	public static List<ElectricityTariffPlan> allPlans() {
+		return Arrays.stream(ElectricityTariffCode.values())
+			.map(PLANS::get)
+			.toList();
+	}
+
+	private static Map<ElectricityTariffCode, ElectricityTariffPlan> buildPlans() {
 		EnumMap<ElectricityTariffCode, ElectricityTariffPlan> plans = new EnumMap<>(ElectricityTariffCode.class);
 		add(plans, ElectricityTariffCode.HIGH_VOLTAGE_A_OPTION_I, "7220",
 			rates("121.5", "169.3", "234.5", "121.5", "138.9", "156.4", "128.5", "169.5", "210.1"));

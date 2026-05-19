@@ -255,6 +255,7 @@ const selectedPlant = computed(() =>
 )
 const chatbotMessagesChronological = computed(() => [...state.chatbotMessages].reverse())
 const chatbotSuggestedQuestions = [
+  '이번 달 전기요금 줄일 수 있는 요금제가 있어?',
   '오늘 전력 사용량과 ESG 상태를 요약해줘',
   '피크 전력 위험이 있는지 알려줘',
   '용수와 가스 사용량에서 확인할 점을 알려줘',

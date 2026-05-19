@@ -37,6 +37,9 @@ public class OpenAiChatbotClient {
 		For trend questions, use the dailyEnergyTrend and trendInsights data with dates and units.
 		For line usage questions, use facilityLineUsageSummary and name the top facilities when available.
 		When mentioning electricity, use kWh. When mentioning peak power, use kW.
+		For electricity bill or tariff questions, use electricityBillComparison from the reference data only.
+		Describe electricity bill values as estimates, not as official invoices.
+		For electricity bill answers, include the plant period, tariff name, KRW amount, billing demand in kW, and excluded items when available.
 		When mentioning ESG, include both the score and grade if they are available.
 		Suggest one immediate next check for the operator in a single sentence.
 		""";

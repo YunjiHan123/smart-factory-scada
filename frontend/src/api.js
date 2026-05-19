@@ -178,6 +178,7 @@ export const api = {
   energyFacilityLine: (params) => apiFetch(`/api/energy/facility-line${toQuery(params)}`),
   peakDashboard: (params) => apiFetch(`/api/energy/peak-dashboard${toQuery(params)}`),
   electricityBillEstimate: (params) => apiFetch(`/api/energy/electricity-bill-estimate${toQuery(params)}`),
+  electricityBillComparison: (params) => apiFetch(`/api/energy/electricity-bill-comparison${toQuery(params)}`),
   utilityDashboard: (params) => apiFetch(`/api/energy/utility-dashboard${toQuery(params)}`),
   latestEnergy: (plantId, facilityId) => apiFetch(`/api/energy/latest/plants/${plantId}/facilities/${facilityId}`),
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),

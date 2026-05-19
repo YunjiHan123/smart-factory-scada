@@ -11,7 +11,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.junit.jupiter.api.BeforeEach;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -31,8 +31,12 @@ class ElectricityBillServiceTest {
 	@Mock
 	private EnergyMapper energyMapper;
 
-	@InjectMocks
 	private ElectricityBillService electricityBillService;
+
+	@BeforeEach
+	void setUp() {
+		electricityBillService = new ElectricityBillService(energyMapper, new ElectricityBillCalculator());
+	}
 
 	@Test
 	void estimateUsesDefaultHighVoltageAOptionTwoTariff() {
