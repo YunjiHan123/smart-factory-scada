@@ -73,11 +73,7 @@ const syncingSelection = ref(false)
 const realtimeNow = ref(Date.now())
 let energySocket = null
 let energySocketReconnectTimer = null
-let energyPollTimer = null
 let realtimeTickTimer = null
-let latestEnergyPollInFlight = false
-let latestEnergyPollRetryAt = 0
-let latestEnergyPollFailureCount = 0
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
 let googleMapsConfigured = false
@@ -95,7 +91,6 @@ let usersRequestId = 0
 let alarmsRequestId = 0
 const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
-const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
 const PLANT_PEAK_THRESHOLD_KW = 8500
 const DEFAULT_PLANT_LOCATIONS = {
@@ -576,17 +571,6 @@ function energyMetricKeys(energyType) {
     SOLAR: { camel: 'solarKwh', snake: 'solar_kwh' },
   }
   return values[energyType] || values.ELECTRICITY
-}
-
-function markLatestEnergyPollSuccess() {
-  latestEnergyPollFailureCount = 0
-  latestEnergyPollRetryAt = 0
-}
-
-function markLatestEnergyPollFailure() {
-  latestEnergyPollFailureCount += 1
-  const retryDelay = Math.min(15000, 2000 * latestEnergyPollFailureCount)
-  latestEnergyPollRetryAt = Date.now() + retryDelay
 }
 
 function allLineFacilityIds(plantId = selectedPlantId.value) {
@@ -2179,7 +2163,6 @@ async function run(task) {
       error.message.includes('Unauthorized')
       ) {
         stopEnergyWebSocket()
-        stopEnergyPolling()
         clearTokens()
         routeTo('/login')
     }
@@ -2204,7 +2187,6 @@ async function logout() {
       await api.logout()
     } finally {
       stopEnergyWebSocket()
-      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -2610,7 +2592,6 @@ async function loadEnergyData() {
   }
   await loadFacilityDetail()
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function preloadPlantLiveEnergy(dateValue = formatDateInput(new Date()), toValue = formatDateTimeInput(new Date())) {
@@ -2681,7 +2662,6 @@ async function loadOverviewEnergyData() {
   state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function loadFacilityDetail() {
@@ -2728,7 +2708,6 @@ async function loadPeakDashboard(options = {}) {
       await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
     }
     startEnergyWebSocket()
-    startEnergyPolling()
   } finally {
     if (!silent && requestId === peakDashboardRequestId) {
       peakDashboardLoading.value = false
@@ -2766,7 +2745,6 @@ async function loadUtilityDashboard(options = {}) {
       await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
     }
     startEnergyWebSocket()
-    startEnergyPolling()
   } finally {
     if (!silent && requestId === utilityDashboardRequestId) {
       utilityDashboardLoading.value = false
@@ -2799,73 +2777,6 @@ async function loadEsgDashboard(options = {}) {
     if (!silent && requestId === esgDashboardRequestId) {
       esgDashboardLoading.value = false
     }
-  }
-}
-
-async function loadLatestEnergy() {
-  if (!selectedPlantId.value || appMode.value === 'login') {
-    state.latestEnergy = null
-    return
-  }
-  if (Date.now() < latestEnergyPollRetryAt) {
-    return
-  }
-
-  if (activePage.value === 'facility' && selectedFacilityDateIsToday.value) {
-    const visibleFacilityIds = new Set(allLineFacilityIds(selectedPlantId.value))
-    let rows = []
-    try {
-      rows = await api.energyMeasurements({
-        plantId: selectedPlantId.value,
-        from: `${formatDateInput(new Date())}T00:00:00`,
-        to: formatDateTimeInput(new Date()),
-        limit: 5000,
-      })
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    rememberLatestRowsByFacility(rows, visibleFacilityIds)
-    state.latestEnergy = selectedLiveEnergy.value || Array.from(liveEnergyByFacility.values()).find((message) =>
-      visibleFacilityIds.has(Number(message.facilityId))
-    ) || null
-    return
-  }
-
-  if (selectedFacilityId.value) {
-    let latestEnergy = null
-    try {
-      latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value)
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
-    return
-  }
-
-  let rows = []
-  try {
-    rows = await api.energyMeasurements({
-      plantId: selectedPlantId.value,
-      from: `${formatDateInput(new Date())}T00:00:00`,
-      to: formatDateTimeInput(new Date()),
-      limit: 5000,
-    })
-    markLatestEnergyPollSuccess()
-  } catch {
-    markLatestEnergyPollFailure()
-    return
-  }
-  rememberLatestRowsByFacility(rows, new Set(allLineFacilityIds(selectedPlantId.value)))
-  state.latestEnergy = selectedLiveEnergy.value || null
-  if (activePage.value === 'peak') {
-    schedulePeakRefresh()
-  }
-  if (activePage.value === 'utility') {
-    scheduleUtilityRefresh()
   }
 }
 
@@ -2950,33 +2861,6 @@ function stopEnergyWebSocket() {
     socket.onclose = null
     socket.close()
   }
-}
-
-function startEnergyPolling() {
-  if (energyPollTimer || appMode.value === 'login') {
-    return
-  }
-
-  energyPollTimer = window.setInterval(async () => {
-    if (latestEnergyPollInFlight || appMode.value === 'login') {
-      return
-    }
-
-    latestEnergyPollInFlight = true
-    try {
-      await loadLatestEnergy()
-    } finally {
-      latestEnergyPollInFlight = false
-    }
-  }, LIVE_POLL_MS)
-}
-
-function stopEnergyPolling() {
-  window.clearInterval(energyPollTimer)
-  energyPollTimer = null
-  latestEnergyPollInFlight = false
-  latestEnergyPollRetryAt = 0
-  latestEnergyPollFailureCount = 0
 }
 
 async function refreshData() {
@@ -3180,7 +3064,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
-  stopEnergyPolling()
   clearDashboardMapMarkers()
   clearEsgMapMarkers()
   window.clearInterval(realtimeTickTimer)
