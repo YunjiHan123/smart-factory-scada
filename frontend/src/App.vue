@@ -459,7 +459,7 @@ const facilityEquipmentCards = computed(() => {
       selectedEnergyMetricKeys.value.camel,
       selectedEnergyMetricKeys.value.snake,
     )
-    const displayUsage = baseUsage + Number(liveUsage || 0)
+    const displayUsage = baseUsage + Number(liveUsage || 0) + estimatedRealtimeUsage(facility, live)
     const monthlyAverage = Number(facility.monthlyAverageKwh || 0)
     return {
       ...facility,
@@ -2292,6 +2292,7 @@ async function loadInitial() {
     syncingSelection.value = true
     selectedPlantId.value = me.role === 'ADMIN' ? fallbackPlantId : userPlant?.id ?? fallbackPlantId
     syncingSelection.value = false
+    startEnergyWebSocket()
 
     if (!selectedPlantId.value) {
       state.facilities = []
@@ -2301,6 +2302,8 @@ async function loadInitial() {
       state.facilityDetail = null
       return
     }
+
+    state.facilities = await api.facilities(selectedPlantId.value).catch(() => [])
 
     if (appMode.value === 'detail' && activePage.value !== 'facility') {
       await loadActivePageData()
@@ -2799,7 +2802,7 @@ async function loadPeakDashboard(options = {}) {
     state.peakBillEstimate = billResult.billEstimate
     peakBillError.value = billResult.error
     if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
-      await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
+      preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date())).catch(() => {})
     }
     startEnergyWebSocket()
   } finally {
@@ -2836,7 +2839,7 @@ async function loadUtilityDashboard(options = {}) {
     }
     state.utilityDashboard = dashboard
     if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
-      await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
+      preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date())).catch(() => {})
     }
     startEnergyWebSocket()
   } finally {

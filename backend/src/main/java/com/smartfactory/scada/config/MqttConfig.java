@@ -70,9 +70,9 @@ public class MqttConfig {
 	public TaskExecutor mqttTaskExecutor() {
 		ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
 		taskExecutor.setThreadNamePrefix("mqtt-worker-");
-		taskExecutor.setCorePoolSize(4);
-		taskExecutor.setMaxPoolSize(8);
-		taskExecutor.setQueueCapacity(1_000);
+		taskExecutor.setCorePoolSize(1);
+		taskExecutor.setMaxPoolSize(2);
+		taskExecutor.setQueueCapacity(5_000);
 		taskExecutor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 		taskExecutor.initialize();
 		return taskExecutor;
