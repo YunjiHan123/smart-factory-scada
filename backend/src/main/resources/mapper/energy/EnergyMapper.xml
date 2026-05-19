@@ -887,14 +887,21 @@
                 COALESCE(SUM(max_kw), 0) AS max_kw
             FROM bucket_facility
             GROUP BY measured_at
+        ),
+        daily_bucket AS (
+            SELECT
+                DATE(measured_at) AS measured_date,
+                average_kw,
+                max_kw
+            FROM plant_bucket
         )
         SELECT
-            TIMESTAMP(DATE(measured_at)) AS measured_at,
+            TIMESTAMP(measured_date) AS measured_at,
             ROUND(COALESCE(AVG(average_kw), 0), 2) AS average_kw,
             ROUND(COALESCE(MAX(max_kw), 0), 2) AS max_kw
-        FROM plant_bucket
-        GROUP BY DATE(measured_at)
-        ORDER BY measured_at ASC
+        FROM daily_bucket
+        GROUP BY measured_date
+        ORDER BY measured_date ASC
     </select>
 
     <select id="findPeakPowerFacilityRanking" resultMap="PeakPowerFacilityRankingResultMap">
