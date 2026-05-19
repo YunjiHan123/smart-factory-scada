@@ -15,6 +15,7 @@ import {
   ListOrdered,
   LogOut,
   RadioReceiver,
+  ReceiptText,
   Search,
   Send,
   SunMedium,
@@ -41,6 +42,7 @@ const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedPeakPeriod = ref('DAY')
 const activePeakView = ref('comparison')
 const peakDashboardLoading = ref(false)
+const peakBillError = ref('')
 const selectedUtilityDate = ref(formatDateInput(new Date()))
 const selectedUtilityPeriod = ref('DAY')
 const activeUtilityView = ref('comparison')
@@ -144,6 +146,7 @@ const state = reactive({
   measurements: [],
   latestEnergy: null,
   peakDashboard: null,
+  peakBillEstimate: null,
   utilityDashboard: null,
   esgDashboard: null,
   facilityDetail: null,
@@ -1228,6 +1231,49 @@ const peakHistoryRows = computed(() =>
     thresholdKw: row.thresholdKw || row.threshold_kw,
   })).filter((row) => Number(row.peakUsageRate || 0) > 100),
 )
+const peakBillSummary = computed(() => {
+  const bill = state.peakBillEstimate
+  if (!bill) {
+    return {
+      hasEstimate: false,
+      tariffName: '-',
+      periodRangeLabel: peakPeriodRangeLabel.value,
+      assumptions: [],
+    }
+  }
+
+  const periodFrom = bill.periodFrom || bill.period_from || selectedPeakDate.value
+  const periodTo = bill.periodTo || bill.period_to || selectedPeakDate.value
+  const periodRangeLabel = periodFrom === periodTo ? formatDate(periodFrom) : `${formatDate(periodFrom)} - ${formatDate(periodTo)}`
+
+  return {
+    hasEstimate: true,
+    tariffName: bill.tariffName || bill.tariff_name || '-',
+    source: bill.source || '',
+    periodRangeLabel,
+    billingDemandKw: Number(bill.billingDemandKw || bill.billing_demand_kw || 0),
+    billingPeakMeasuredAt: bill.billingPeakMeasuredAt || bill.billing_peak_measured_at || null,
+    basicRateKrwPerKw: Number(bill.basicRateKrwPerKw || bill.basic_rate_krw_per_kw || 0),
+    basicChargeKrw: Number(bill.basicChargeKrw || bill.basic_charge_krw || 0),
+    energyChargeKrw: Number(bill.energyChargeKrw || bill.energy_charge_krw || 0),
+    estimatedTotalKrw: Number(bill.estimatedTotalKrw || bill.estimated_total_krw || 0),
+    demandUnit: bill.demandUnit || bill.demand_unit || 'kW',
+    usageUnit: bill.usageUnit || bill.usage_unit || 'kWh',
+    currencyUnit: bill.currencyUnit || bill.currency_unit || 'KRW',
+    assumptions: bill.assumptions || [],
+  }
+})
+const peakBillBreakdownRows = computed(() => {
+  const breakdown = state.peakBillEstimate?.usageBreakdown || state.peakBillEstimate?.usage_breakdown || []
+  return breakdown.map((row, index) => ({
+    id: `${row.season || row.season_name || index}-${row.loadPeriod || row.load_period || index}`,
+    seasonName: row.seasonName || row.season_name || row.season || '-',
+    loadPeriodName: row.loadPeriodName || row.load_period_name || row.loadPeriod || row.load_period || '-',
+    usageKwh: Number(row.usageKwh || row.usage_kwh || 0),
+    rateKrwPerKwh: Number(row.rateKrwPerKwh || row.rate_krw_per_kwh || 0),
+    chargeKrw: Number(row.chargeKrw || row.charge_krw || 0),
+  }))
+})
 const utilityMetrics = computed(() => {
   const metrics = state.utilityDashboard?.metrics || {}
   if (!selectedUtilityDateIsToday.value || selectedUtilityPeriod.value !== 'DAY') {
@@ -1750,6 +1796,11 @@ function formatNumber(value, digits = 1) {
   })
 }
 
+function formatMoney(value) {
+  const formatted = formatNumber(value, 0)
+  return formatted === '-' ? '-' : `${formatted}원`
+}
+
 function alarmKeyword(alarm) {
   const key = alarm.alarmType || String(alarm.message || '기타').trim().split(/\s+/)[0] || 'OTHER'
   return {
@@ -2132,12 +2183,6 @@ async function loadDashboardData() {
   state.esgScores = esgScores
 }
 
-async function loadAlarms() {
-  state.alarms = await api.alarms({
-    plantId: selectedPlantId.value || undefined,
-    status: 'OCCURRED',
-    limit: 100,
-  })
 async function loadAlarms(options = {}) {
   const { silent = false } = options || {}
   const requestId = ++alarmsRequestId
@@ -2511,6 +2556,8 @@ async function loadPeakDashboard(options = {}) {
 
   if (!selectedPlantId.value) {
     state.peakDashboard = null
+    state.peakBillEstimate = null
+    peakBillError.value = ''
     if (!silent && requestId === peakDashboardRequestId) {
       peakDashboardLoading.value = false
     }
@@ -2522,15 +2569,24 @@ async function loadPeakDashboard(options = {}) {
   }
 
   try {
-    const dashboard = await api.peakDashboard({
+    const params = {
       plantId: selectedPlantId.value,
       date: selectedPeakDate.value || undefined,
       period: selectedPeakPeriod.value,
-    })
+    }
+    const billEstimateRequest = api.electricityBillEstimate(params)
+      .then((billEstimate) => ({ billEstimate, error: '' }))
+      .catch(() => ({ billEstimate: null, error: '요금 추정 정보를 불러오지 못했습니다.' }))
+    const [dashboard, billResult] = await Promise.all([
+      api.peakDashboard(params),
+      billEstimateRequest,
+    ])
     if (requestId !== peakDashboardRequestId) {
       return
     }
     state.peakDashboard = dashboard
+    state.peakBillEstimate = billResult.billEstimate
+    peakBillError.value = billResult.error
     if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
       await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
     }
@@ -3467,6 +3523,64 @@ onUnmounted(() => {
           </template>
         </section>
 
+        <section class="panel peak-bill-summary-card" :aria-busy="peakDashboardLoading">
+          <template v-if="peakDashboardLoading">
+            <div class="peak-bill-heading">
+              <span class="peak-skeleton-icon small"></span>
+              <div>
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+            </div>
+            <div class="peak-bill-summary-skeleton">
+              <span class="peak-skeleton-line hero"></span>
+              <span v-for="index in 4" :key="`peak-bill-summary-skeleton-${index}`" class="peak-skeleton-line medium"></span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="peak-bill-heading">
+              <span class="peak-bill-icon"><ReceiptText :size="22" /></span>
+              <div>
+                <h2>전기요금 추정</h2>
+                <p>{{ peakBillSummary.tariffName }} · {{ peakBillSummary.periodRangeLabel }}</p>
+              </div>
+            </div>
+            <div v-if="peakBillError" class="peak-bill-error" role="status">
+              <AlertTriangle :size="18" />
+              <span>{{ peakBillError }}</span>
+            </div>
+            <div v-else-if="peakBillSummary.hasEstimate" class="peak-bill-summary-content">
+              <div class="peak-bill-total">
+                <span>예상 합계</span>
+                <strong>{{ formatMoney(peakBillSummary.estimatedTotalKrw) }}</strong>
+                <em>추정치 · {{ peakBillSummary.currencyUnit }}</em>
+              </div>
+              <div class="peak-bill-mini-grid">
+                <article>
+                  <span>기본요금</span>
+                  <b>{{ formatMoney(peakBillSummary.basicChargeKrw) }}</b>
+                </article>
+                <article>
+                  <span>전력량요금</span>
+                  <b>{{ formatMoney(peakBillSummary.energyChargeKrw) }}</b>
+                </article>
+                <article>
+                  <span>산정 피크</span>
+                  <b>{{ formatNumber(peakBillSummary.billingDemandKw, 2) }} {{ peakBillSummary.demandUnit }}</b>
+                </article>
+                <article>
+                  <span>피크 시각</span>
+                  <b>{{ formatDateTime(peakBillSummary.billingPeakMeasuredAt) }}</b>
+                </article>
+              </div>
+            </div>
+            <div v-else class="peak-bill-error muted" role="status">
+              <AlertTriangle :size="18" />
+              <span>요금 추정 데이터가 없습니다.</span>
+            </div>
+          </template>
+        </section>
+
         <section class="peak-view-tabs" aria-label="피크 전력 보기">
           <button
             v-for="option in peakViewOptions"
@@ -3543,6 +3657,16 @@ onUnmounted(() => {
               </div>
               <div class="peak-skeleton-ranking">
                 <span v-for="index in 5" :key="`peak-ranking-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel peak-bill-detail-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-bill-detail-skeleton">
+                <span v-for="index in 7" :key="`peak-bill-detail-skeleton-${index}`" class="peak-skeleton-line medium"></span>
               </div>
             </article>
           </section>
@@ -3660,6 +3784,60 @@ onUnmounted(() => {
                 </div>
                 <em>{{ formatNumber(item.shareRate) }}%</em>
               </article>
+            </div>
+          </article>
+
+          <article class="panel peak-bill-detail-panel">
+            <div class="panel-title inline">
+              <h2>요금 산정 상세</h2>
+              <span>{{ peakBillSummary.tariffName }} · {{ peakBillSummary.periodRangeLabel }}</span>
+            </div>
+            <div v-if="peakBillError" class="peak-bill-error" role="status">
+              <AlertTriangle :size="18" />
+              <span>{{ peakBillError }}</span>
+            </div>
+            <template v-else-if="peakBillSummary.hasEstimate">
+              <div class="peak-bill-formula-grid">
+                <article>
+                  <span>기본요금</span>
+                  <strong>{{ formatMoney(peakBillSummary.basicChargeKrw) }}</strong>
+                  <em>
+                    {{ formatNumber(peakBillSummary.billingDemandKw, 2) }} {{ peakBillSummary.demandUnit }}
+                    × {{ formatNumber(peakBillSummary.basicRateKrwPerKw, 0) }}원/{{ peakBillSummary.demandUnit }}
+                  </em>
+                </article>
+                <article>
+                  <span>전력량요금</span>
+                  <strong>{{ formatMoney(peakBillSummary.energyChargeKrw) }}</strong>
+                  <em>시간대별 {{ peakBillSummary.usageUnit }} × 원/{{ peakBillSummary.usageUnit }}</em>
+                </article>
+                <article>
+                  <span>예상 합계</span>
+                  <strong>{{ formatMoney(peakBillSummary.estimatedTotalKrw) }}</strong>
+                  <em>기본요금 + 전력량요금</em>
+                </article>
+              </div>
+
+              <div class="peak-bill-breakdown-list">
+                <article v-for="row in peakBillBreakdownRows" :key="row.id">
+                  <div>
+                    <b>{{ row.seasonName }} · {{ row.loadPeriodName }}</b>
+                    <span>{{ formatNumber(row.usageKwh, 2) }} kWh × {{ formatNumber(row.rateKrwPerKwh) }}원/kWh</span>
+                  </div>
+                  <strong>{{ formatMoney(row.chargeKrw) }}</strong>
+                </article>
+                <p v-if="!peakBillBreakdownRows.length">선택 기간의 전력량요금 산정 데이터가 없습니다.</p>
+              </div>
+
+              <div class="peak-bill-assumptions">
+                <span v-for="assumption in peakBillSummary.assumptions" :key="assumption">
+                  {{ assumption }}
+                </span>
+              </div>
+            </template>
+            <div v-else class="peak-bill-error muted" role="status">
+              <AlertTriangle :size="18" />
+              <span>요금 추정 데이터가 없습니다.</span>
             </div>
           </article>
         </section>
@@ -4578,8 +4756,6 @@ onUnmounted(() => {
       </section>
 
       <section v-else-if="activePage === 'alarms'" class="page-stack alarm-page">
-        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
-      <section v-else class="page-stack alarm-page">
         <article v-if="alarmsLoading" class="panel table-panel alarm-tab-panel alarm-skeleton-panel" role="status" aria-live="polite">
           <span class="sr-only">알람 목록을 불러오는 중입니다.</span>
           <div class="panel-title inline alarm-panel-title">
