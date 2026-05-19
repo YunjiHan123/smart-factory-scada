@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.smartfactory.scada.energy.domain.EnergyType;
+import com.smartfactory.scada.energy.domain.ElectricityTariffCode;
 import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.domain.UtilityUsagePeriod;
@@ -20,8 +21,12 @@ import com.smartfactory.scada.energy.dto.EnergyFacilityDetailResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementResponse;
 import com.smartfactory.scada.energy.dto.EnergySummaryResponse;
+import com.smartfactory.scada.energy.dto.ElectricityBillComparisonResponse;
+import com.smartfactory.scada.energy.dto.ElectricityBillEstimateResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerDashboardResponse;
 import com.smartfactory.scada.energy.dto.UtilityUsageDashboardResponse;
+import com.smartfactory.scada.energy.service.ElectricityBillComparisonService;
+import com.smartfactory.scada.energy.service.ElectricityBillService;
 import com.smartfactory.scada.energy.service.EnergyService;
 import com.smartfactory.scada.facility.domain.FacilityType;
 
@@ -35,6 +40,8 @@ import lombok.RequiredArgsConstructor;
 public class EnergyMeasurementController {
 
 	private final EnergyService energyService;
+	private final ElectricityBillService electricityBillService;
+	private final ElectricityBillComparisonService electricityBillComparisonService;
 
 	@GetMapping("/measurements")
 	public List<EnergyMeasurementResponse> getMeasurements(
@@ -86,6 +93,26 @@ public class EnergyMeasurementController {
 		@RequestParam(required = false) PeakPowerPeriod period
 	) {
 		return energyService.getPeakDashboard(plantId, date, period);
+	}
+
+	@GetMapping("/electricity-bill-estimate")
+	public ElectricityBillEstimateResponse getElectricityBillEstimate(
+		@RequestParam Long plantId,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+		@RequestParam(required = false) PeakPowerPeriod period,
+		@RequestParam(required = false) ElectricityTariffCode tariffCode
+	) {
+		return electricityBillService.estimate(plantId, date, period, tariffCode);
+	}
+
+	@GetMapping("/electricity-bill-comparison")
+	public ElectricityBillComparisonResponse getElectricityBillComparison(
+		@RequestParam Long plantId,
+		@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+		@RequestParam(required = false) PeakPowerPeriod period,
+		@RequestParam(required = false) ElectricityTariffCode baseTariffCode
+	) {
+		return electricityBillComparisonService.compare(plantId, date, period, baseTariffCode);
 	}
 
 	@GetMapping("/utility-dashboard")

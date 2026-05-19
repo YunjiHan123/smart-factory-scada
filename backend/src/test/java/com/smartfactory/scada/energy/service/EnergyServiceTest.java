@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.common.exception.CommonErrorCode;
+import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.facility.domain.FacilityType;
@@ -37,61 +38,66 @@ class EnergyServiceTest {
 	private EnergyService energyService;
 
 	@Test
-	void getFacilityLineUsagesUsesRequestedDateWhenSummaryExists() {
+	void getFacilityLineUsagesUsesRequestedDateWhenDateIsProvided() {
 		LocalDate targetDate = LocalDate.of(2026, 5, 13);
 		List<EnergyFacilityLineUsageResponse> expectedResponses = List.of(new EnergyFacilityLineUsageResponse());
-		given(energyMapper.findFacilityLineSummaryDate(1L, FacilityType.PRESS, targetDate))
-			.willReturn(Optional.of(targetDate));
 		givenFindFacilityLineUsages(1L, FacilityType.PRESS, targetDate, expectedResponses);
 
 		List<EnergyFacilityLineUsageResponse> responses =
-			energyService.getFacilityLineUsages(1L, FacilityType.PRESS, targetDate);
+			energyService.getFacilityLineUsages(1L, FacilityType.PRESS, EnergyType.ELECTRICITY, targetDate);
 
 		assertThat(responses).isSameAs(expectedResponses);
 		then(energyMapper).should(never()).findLatestFacilityLineSummaryDate(1L, FacilityType.PRESS);
 	}
 
 	@Test
-	void getFacilityLineUsagesFallsBackToLatestSummaryDateWhenRequestedDateHasNoData() {
-		LocalDate requestedDate = LocalDate.of(2026, 5, 18);
+	void getFacilityLineUsagesFallsBackToLatestSummaryDateWhenDateIsMissing() {
 		LocalDate latestSummaryDate = LocalDate.of(2026, 5, 13);
 		List<EnergyFacilityLineUsageResponse> expectedResponses = List.of(new EnergyFacilityLineUsageResponse());
-		given(energyMapper.findFacilityLineSummaryDate(1L, FacilityType.BODY, requestedDate))
-			.willReturn(Optional.empty());
 		given(energyMapper.findLatestFacilityLineSummaryDate(1L, FacilityType.BODY))
 			.willReturn(Optional.of(latestSummaryDate));
 		givenFindFacilityLineUsages(1L, FacilityType.BODY, latestSummaryDate, expectedResponses);
 
 		List<EnergyFacilityLineUsageResponse> responses =
-			energyService.getFacilityLineUsages(1L, FacilityType.BODY, requestedDate);
+			energyService.getFacilityLineUsages(1L, FacilityType.BODY, EnergyType.ELECTRICITY, null);
 
 		assertThat(responses).isSameAs(expectedResponses);
 		then(energyMapper).should().findLatestFacilityLineSummaryDate(1L, FacilityType.BODY);
 	}
 
 	@Test
-	void getFacilityLineUsagesUsesRequestedDateWhenNoSummaryDateExists() {
-		LocalDate requestedDate = LocalDate.of(2026, 5, 18);
+	void getFacilityLineUsagesFallsBackToLatestMeasurementDateWhenSummaryDateIsMissing() {
+		LocalDate latestMeasurementDate = LocalDate.of(2026, 5, 18);
 		List<EnergyFacilityLineUsageResponse> expectedResponses = List.of(new EnergyFacilityLineUsageResponse());
-		given(energyMapper.findFacilityLineSummaryDate(1L, FacilityType.PAINT, requestedDate))
-			.willReturn(Optional.empty());
 		given(energyMapper.findLatestFacilityLineSummaryDate(1L, FacilityType.PAINT))
 			.willReturn(Optional.empty());
-		givenFindFacilityLineUsages(1L, FacilityType.PAINT, requestedDate, expectedResponses);
+		given(energyMapper.findLatestFacilityLineMeasurementDate(1L, FacilityType.PAINT))
+			.willReturn(Optional.of(latestMeasurementDate));
+		givenFindFacilityLineUsages(1L, FacilityType.PAINT, latestMeasurementDate, expectedResponses);
 
 		List<EnergyFacilityLineUsageResponse> responses =
-			energyService.getFacilityLineUsages(1L, FacilityType.PAINT, requestedDate);
+			energyService.getFacilityLineUsages(1L, FacilityType.PAINT, EnergyType.ELECTRICITY, null);
 
 		assertThat(responses).isSameAs(expectedResponses);
 	}
 
 	@Test
 	void getFacilityLineUsagesThrowsValidationErrorWhenRequiredArgumentsAreMissing() {
-		assertThatThrownBy(() -> energyService.getFacilityLineUsages(null, FacilityType.PRESS, LocalDate.now()))
+		assertThatThrownBy(() -> energyService.getFacilityLineUsages(
+			null,
+			FacilityType.PRESS,
+			EnergyType.ELECTRICITY,
+			LocalDate.now()
+		))
 			.isInstanceOfSatisfying(BusinessException.class, exception ->
 				assertThat(exception.getErrorCode()).isEqualTo(CommonErrorCode.VALIDATION_ERROR)
 			);
-		assertThatThrownBy(() -> energyService.getFacilityLineUsages(1L, null, LocalDate.now()))
+		assertThatThrownBy(() -> energyService.getFacilityLineUsages(
+			1L,
+			null,
+			EnergyType.ELECTRICITY,
+			LocalDate.now()
+		))
 			.isInstanceOfSatisfying(BusinessException.class, exception ->
 				assertThat(exception.getErrorCode()).isEqualTo(CommonErrorCode.VALIDATION_ERROR)
 			);
@@ -108,6 +114,7 @@ class EnergyServiceTest {
 		given(energyMapper.findFacilityLineUsages(
 			eq(plantId),
 			eq(facilityType),
+			eq(EnergyType.ELECTRICITY.name()),
 			eq(usageDate),
 			eq(usageDate.minusDays(1)),
 			eq(usageDate.withDayOfMonth(1)),
