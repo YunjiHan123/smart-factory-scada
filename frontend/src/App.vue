@@ -46,6 +46,7 @@ const chatbotSending = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
+const alarmSortOrder = ref('desc')
 const syncingSelection = ref(false)
 const realtimeNow = ref(Date.now())
 let energySocket = null
@@ -68,6 +69,7 @@ const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
 const liveEnergySeenAtByFacility = reactive(new Map())
+const alarmActiveKeywords = reactive({})
 const nowLabel = computed(() =>
   new Intl.DateTimeFormat('ko-KR', {
     dateStyle: 'medium',
@@ -830,6 +832,66 @@ const peakUsageRate = computed(() => {
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
+const alarmTypeLabels = {
+  PEAK: '피크',
+  ELECTRICITY: '전기',
+  GAS: '가스',
+  WATER: '용수',
+  FACILITY: '설비',
+  ESG: 'ESG',
+}
+const occurredAlarms = computed(() =>
+  state.alarms.filter((alarm) => (alarm.status || 'OCCURRED') === 'OCCURRED'),
+)
+const alarmPlantGroups = computed(() => {
+  const plants = new Map()
+
+  sortedAlarms(occurredAlarms.value).forEach((alarm) => {
+    const plantId = alarm.plantId ?? selectedPlantId.value ?? 'all'
+    const plantName = alarm.plantName || selectedPlant.value?.name || `사업장 ${plantId}`
+    const plantKey = String(plantId)
+    const keyword = alarmKeyword(alarm)
+
+    if (!plants.has(plantKey)) {
+      plants.set(plantKey, {
+        key: plantKey,
+        plantId,
+        plantName,
+        totalCount: 0,
+        keywords: new Map(),
+      })
+    }
+
+    const plant = plants.get(plantKey)
+    plant.totalCount += 1
+
+    if (!plant.keywords.has(keyword.key)) {
+      plant.keywords.set(keyword.key, {
+        ...keyword,
+        alarms: [],
+      })
+    }
+
+    plant.keywords.get(keyword.key).alarms.push(alarm)
+  })
+
+  return Array.from(plants.values())
+    .map((plant) => {
+      const keywordTabs = Array.from(plant.keywords.values())
+        .map((keyword) => ({
+          ...keyword,
+          count: keyword.alarms.length,
+          alarms: sortedAlarms(keyword.alarms),
+        }))
+        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko-KR'))
+
+      return {
+        ...plant,
+        keywordTabs,
+      }
+    })
+    .sort((a, b) => String(a.plantName).localeCompare(String(b.plantName), 'ko-KR'))
+})
 const peakMetrics = computed(() => {
   const metrics = state.peakDashboard?.metrics || {}
   const live = selectedPlantLiveEnergy.value
@@ -1290,6 +1352,40 @@ function formatNumber(value, digits = 1) {
   })
 }
 
+function alarmKeyword(alarm) {
+  const key = alarm.alarmType || String(alarm.message || '기타').trim().split(/\s+/)[0] || 'OTHER'
+  return {
+    key,
+    label: alarmTypeLabels[key] || key,
+  }
+}
+
+function sortedAlarms(alarms) {
+  const direction = alarmSortOrder.value === 'asc' ? 1 : -1
+  return [...alarms].sort((a, b) => {
+    const aTime = Date.parse(a.occurredAt || '') || 0
+    const bTime = Date.parse(b.occurredAt || '') || 0
+    return (aTime - bTime) * direction
+  })
+}
+
+function activeAlarmKeyword(group) {
+  const current = alarmActiveKeywords[group.key]
+  if (group.keywordTabs.some((tab) => tab.key === current)) {
+    return current
+  }
+  return group.keywordTabs[0]?.key || null
+}
+
+function selectAlarmKeyword(groupKey, keyword) {
+  alarmActiveKeywords[groupKey] = keyword
+}
+
+function activeAlarmRows(group) {
+  const activeKeyword = activeAlarmKeyword(group)
+  return group.keywordTabs.find((tab) => tab.key === activeKeyword)?.alarms || []
+}
+
 function formatDateTime(value) {
   if (!value) {
     return '-'
@@ -1579,8 +1675,16 @@ async function loadActivePageData() {
   }
 
   if (activePage.value === 'alarms') {
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   }
+}
+
+async function loadAlarms() {
+  state.alarms = await api.alarms({
+    plantId: selectedPlantId.value || undefined,
+    status: 'OCCURRED',
+    limit: 100,
+  })
 }
 
 async function loadChatbotMessages() {
@@ -2024,24 +2128,21 @@ function scheduleAlarmRefresh() {
     return
   }
   lastAlarmRefreshAt = Date.now()
-  api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
-    .then((alarms) => {
-      state.alarms = alarms
-    })
+  loadAlarms()
     .catch(() => {})
 }
 
 async function resolveAlarm(alarmId) {
   await run(async () => {
     await api.resolveAlarm(alarmId)
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   })
 }
 
 async function deleteAlarm(alarmId) {
   await run(async () => {
     await api.deleteAlarm(alarmId)
-    state.alarms = await api.alarms({ plantId: selectedPlantId.value || undefined, limit: 100 })
+    await loadAlarms()
   })
 }
 
@@ -3238,31 +3339,73 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <section v-else class="page-stack">
-        <article class="panel table-panel">
-          <h2>알람 목록</h2>
-          <div class="alarm-table-scroll">
-            <table>
-              <thead><tr><th>발생 시각</th><th>설비</th><th>레벨</th><th>메시지</th><th>값</th><th>기준</th><th>상태</th><th>관리</th></tr></thead>
-              <tbody>
-                <tr v-for="alarm in state.alarms" :key="alarm.id">
-                  <td>{{ formatDateTime(alarm.occurredAt) }}</td>
-                  <td>{{ alarm.facilityName }}</td>
-                  <td>{{ alarm.alarmLevel }}</td>
-                  <td>{{ alarm.message }}</td>
-                  <td>{{ formatNumber(alarm.value) }}</td>
-                  <td>{{ formatNumber(alarm.thresholdValue) }}</td>
-                  <td><span :class="['badge', alarm.status === 'RESOLVED' ? 'ok' : 'warn']">{{ statusLabel(alarm.status) }}</span></td>
-                  <td>
-                    <div class="alarm-action-cell">
-                      <button class="light-button compact" type="button" :disabled="alarm.status === 'RESOLVED'" @click="resolveAlarm(alarm.id)">처리</button>
-                      <button class="danger-button compact" type="button" :disabled="alarm.status !== 'RESOLVED'" @click="deleteAlarm(alarm.id)">삭제</button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+      <section v-else class="page-stack alarm-page">
+        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
+          <div class="panel-title inline alarm-panel-title">
+            <h2>알람 목록</h2>
+            <div class="segmented alarm-sort-switch" role="group" aria-label="알람 정렬">
+              <button
+                type="button"
+                :class="{ active: alarmSortOrder === 'desc' }"
+                @click="alarmSortOrder = 'desc'"
+              >
+                최근순
+              </button>
+              <button
+                type="button"
+                :class="{ active: alarmSortOrder === 'asc' }"
+                @click="alarmSortOrder = 'asc'"
+              >
+                오래된 순
+              </button>
+            </div>
           </div>
+
+          <section v-for="group in alarmPlantGroups" :key="group.key" class="alarm-plant-group">
+            <div class="alarm-plant-header">
+              <h3>{{ group.plantName }}</h3>
+              <span>{{ group.totalCount }}건</span>
+            </div>
+
+            <div class="alarm-keyword-layout">
+              <div class="alarm-keyword-tabs" role="tablist" :aria-label="`${group.plantName} 알람 키워드`">
+                <button
+                  v-for="tab in group.keywordTabs"
+                  :key="tab.key"
+                  type="button"
+                  :class="{ active: activeAlarmKeyword(group) === tab.key }"
+                  role="tab"
+                  :aria-selected="activeAlarmKeyword(group) === tab.key"
+                  @click="selectAlarmKeyword(group.key, tab.key)"
+                >
+                  <span>{{ tab.label }}</span>
+                  <b>{{ tab.count }}</b>
+                </button>
+              </div>
+
+              <div class="alarm-table-scroll alarm-keyword-table">
+                <table>
+                  <thead><tr><th>발생 시각</th><th>설비</th><th>레벨</th><th>메시지</th><th>값</th><th>기준</th><th>상태</th><th>관리</th></tr></thead>
+                  <tbody>
+                    <tr v-for="alarm in activeAlarmRows(group)" :key="alarm.id">
+                      <td>{{ formatDateTime(alarm.occurredAt) }}</td>
+                      <td>{{ alarm.facilityName || '-' }}</td>
+                      <td>{{ alarm.alarmLevel }}</td>
+                      <td>{{ alarm.message }}</td>
+                      <td>{{ formatNumber(alarm.value) }}</td>
+                      <td>{{ formatNumber(alarm.thresholdValue) }}</td>
+                      <td><span class="badge warn">{{ statusLabel(alarm.status) }}</span></td>
+                      <td>
+                        <div class="alarm-action-cell">
+                          <button class="light-button compact" type="button" @click="resolveAlarm(alarm.id)">처리</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         </article>
       </section>
     </section>

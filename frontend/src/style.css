@@ -855,6 +855,105 @@ input {
   gap: 8px;
 }
 
+.alarm-tab-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.alarm-panel-title {
+  align-items: center;
+}
+
+.alarm-sort-switch button {
+  min-width: 86px;
+}
+
+.alarm-plant-group {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.alarm-plant-group:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.alarm-plant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.alarm-plant-header h3 {
+  margin: 0;
+  color: #0b1633;
+  font-size: 18px;
+}
+
+.alarm-plant-header span {
+  color: #334a73;
+  font-weight: 900;
+}
+
+.alarm-keyword-layout {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.alarm-keyword-tabs {
+  display: grid;
+  max-height: 238px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.alarm-keyword-tabs button {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  color: #334a73;
+  font-weight: 800;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.alarm-keyword-tabs button:last-child {
+  border-bottom: 0;
+}
+
+.alarm-keyword-tabs button.active {
+  color: #fff;
+  background: var(--blue);
+}
+
+.alarm-keyword-tabs b {
+  min-width: 28px;
+  padding: 3px 8px;
+  text-align: center;
+  border-radius: 999px;
+  background: rgba(15, 111, 255, 0.12);
+}
+
+.alarm-keyword-tabs button.active b {
+  color: var(--blue);
+  background: #fff;
+}
+
+.alarm-keyword-table {
+  max-height: 304px;
+}
+
 th,
 td {
   padding: 11px 12px;
@@ -3698,7 +3797,8 @@ td {
   .esg-kpi-grid,
   .esg-main-grid,
   .esg-bottom-grid,
-  .chatbot-layout {
+  .chatbot-layout,
+  .alarm-keyword-layout {
     grid-template-columns: 1fr;
   }
 
@@ -3754,5 +3854,16 @@ td {
 
   .chatbot-input-row {
     grid-template-columns: 1fr;
+  }
+
+  .alarm-panel-title,
+  .alarm-plant-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .alarm-sort-switch,
+  .alarm-sort-switch button {
+    width: 100%;
   }
 }
