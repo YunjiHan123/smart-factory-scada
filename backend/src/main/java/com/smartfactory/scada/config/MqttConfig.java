@@ -7,11 +7,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.integration.channel.ExecutorChannel;
 import org.springframework.integration.dsl.IntegrationFlow;
 import org.springframework.integration.mqtt.core.DefaultMqttPahoClientFactory;
 import org.springframework.integration.mqtt.core.MqttPahoClientFactory;
+import org.springframework.integration.mqtt.event.MqttConnectionFailedEvent;
+import org.springframework.integration.mqtt.event.MqttSubscribedEvent;
 import org.springframework.integration.mqtt.inbound.MqttPahoMessageDrivenChannelAdapter;
 import org.springframework.integration.mqtt.support.DefaultPahoMessageConverter;
 import org.springframework.integration.mqtt.support.MqttHeaders;
@@ -21,6 +24,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import com.smartfactory.scada.energy.service.EnergyMeasurementMqttService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Configuration
 @ConditionalOnProperty(prefix = "mqtt", name = "enabled", havingValue = "true")
 public class MqttConfig {
@@ -83,6 +89,8 @@ public class MqttConfig {
 		MqttPahoClientFactory mqttClientFactory,
 		MessageChannel mqttInputChannel
 	) {
+		log.info("Starting MQTT inbound adapter. brokerUrl={}, clientId={}, topic={}", brokerUrl, clientId, topic);
+
 		MqttPahoMessageDrivenChannelAdapter adapter =
 			new MqttPahoMessageDrivenChannelAdapter(clientId + "-inbound", mqttClientFactory, topic);
 
@@ -94,6 +102,22 @@ public class MqttConfig {
 		adapter.setQos(1);
 		adapter.setOutputChannel(mqttInputChannel);
 		return adapter;
+	}
+
+	@EventListener
+	public void handleMqttSubscribed(MqttSubscribedEvent event) {
+		log.info("MQTT subscription established. {}", event.getMessage());
+	}
+
+	@EventListener
+	public void handleMqttConnectionFailed(MqttConnectionFailedEvent event) {
+		log.error(
+			"MQTT broker connection failed. brokerUrl={}, clientId={}, topic={}",
+			brokerUrl,
+			clientId,
+			topic,
+			event.getCause()
+		);
 	}
 
 	@Bean
