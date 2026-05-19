@@ -3035,6 +3035,13 @@ onUnmounted(() => {
                     <path :d="equipmentIconPath"></path>
                   </svg>
                 </span>
+                <em
+                  v-if="selectedFacilityDateIsToday"
+                  class="facility-equipment-status"
+                  :class="{ warn: facility.facilityStatus !== 'RUNNING' }"
+                >
+                  {{ statusLabel(facility.facilityStatus) }}
+                </em>
                 <strong>{{ facilityCode(facility) }}</strong>
                 <small>{{ facilityProcessName(facility) }}</small>
                 <b>{{ formatNumber(facility.todayUsageKwh, selectedEnergyPrecision) }} <em>{{ selectedEnergyMeta.unit }}</em></b>
