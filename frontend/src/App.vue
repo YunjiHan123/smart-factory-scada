@@ -80,8 +80,10 @@ let peakRefreshTimer = null
 let utilityRefreshTimer = null
 let googleMapsConfigured = false
 let dashboardGoogleMap = null
+let dashboardGoogleMapContainer = null
 let dashboardGoogleOverlays = []
 let esgGoogleMap = null
+let esgGoogleMapContainer = null
 let esgGoogleOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
@@ -901,9 +903,21 @@ function clearDashboardMapMarkers() {
   dashboardGoogleOverlays = []
 }
 
+function resetDashboardGoogleMap() {
+  clearDashboardMapMarkers()
+  dashboardGoogleMap = null
+  dashboardGoogleMapContainer = null
+}
+
 function clearEsgMapMarkers() {
   esgGoogleOverlays.forEach((overlay) => overlay.setMap(null))
   esgGoogleOverlays = []
+}
+
+function resetEsgGoogleMap() {
+  clearEsgMapMarkers()
+  esgGoogleMap = null
+  esgGoogleMapContainer = null
 }
 
 function escapeHtml(value) {
@@ -1073,10 +1087,16 @@ async function renderDashboardGoogleMap() {
   }
 
   dashboardMapState.status = 'loading'
-  dashboardMapState.message = 'Loading map.'
+    dashboardMapState.message = 'Loading map.'
 
   try {
     const maps = await loadGoogleMapsLibrary()
+    if (dashboardGoogleMapContainer !== container) {
+      clearDashboardMapMarkers()
+      dashboardGoogleMap = null
+      dashboardGoogleMapContainer = container
+    }
+
     if (!dashboardGoogleMap) {
       dashboardGoogleMap = new maps.Map(container, {
         ...GOOGLE_MAP_OPTIONS,
@@ -1147,11 +1167,17 @@ async function renderEsgGoogleMap() {
   }
 
   esgMapState.status = 'loading'
-  esgMapState.message = 'Loading map.'
+    esgMapState.message = 'Loading map.'
 
   try {
     const maps = await loadGoogleMapsLibrary()
     const center = { lat: 36.4, lng: 127.9 }
+
+    if (esgGoogleMapContainer !== container) {
+      clearEsgMapMarkers()
+      esgGoogleMap = null
+      esgGoogleMapContainer = container
+    }
 
     if (!esgGoogleMap) {
       esgGoogleMap = new maps.Map(container, {
@@ -2835,10 +2861,11 @@ async function loadEsgDashboard(options = {}) {
       return
     }
     state.esgDashboard = dashboard
-    await renderEsgGoogleMap()
   } finally {
     if (!silent && requestId === esgDashboardRequestId) {
       esgDashboardLoading.value = false
+      await nextTick()
+      await renderEsgGoogleMap()
     }
   }
 }
@@ -3127,8 +3154,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
-  clearDashboardMapMarkers()
-  clearEsgMapMarkers()
+  resetDashboardGoogleMap()
+  resetEsgGoogleMap()
   window.clearInterval(realtimeTickTimer)
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
