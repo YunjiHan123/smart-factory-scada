@@ -38,6 +38,7 @@ import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.EnergyType;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
@@ -297,6 +298,7 @@ class ChatbotServiceTest {
 				given(energyMapper.findFacilityLineUsages(
 					eq(plantId),
 					eq(facilityType),
+					eq(EnergyType.ELECTRICITY.name()),
 					any(LocalDate.class),
 					any(LocalDate.class),
 					any(LocalDate.class),

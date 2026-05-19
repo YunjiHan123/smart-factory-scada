@@ -65,6 +65,16 @@
         <result property="rank" column="plant_rank"/>
     </resultMap>
 
+    <resultMap id="ElectricityBillingDemandPeakResultMap" type="com.smartfactory.scada.energy.dto.ElectricityBillingDemandPeak">
+        <result property="measuredAt" column="measured_at"/>
+        <result property="peakKw" column="peak_kw"/>
+    </resultMap>
+
+    <resultMap id="ElectricityBillingUsageIntervalResultMap" type="com.smartfactory.scada.energy.dto.ElectricityBillingUsageInterval">
+        <result property="measuredAt" column="measured_at"/>
+        <result property="usageKwh" column="usage_kwh"/>
+    </resultMap>
+
     <resultMap id="UtilityHourlyUsageResultMap" type="com.smartfactory.scada.energy.dto.UtilityHourlyUsage">
         <result property="measuredAt" column="measured_at"/>
         <result property="gasUsageM3" column="gas_usage_m3"/>
@@ -1092,6 +1102,78 @@
             NULL AS created_at
         FROM latest_per_facility
         GROUP BY plant_id
+    </select>
+
+    <select id="findElectricityBillingDemandPeak" resultMap="ElectricityBillingDemandPeakResultMap">
+        WITH bucket_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_at,
+                MAX(peak_kw) AS max_kw
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
+        ),
+        plant_bucket AS (
+            SELECT
+                measured_at,
+                ROUND(COALESCE(SUM(max_kw), 0), 2) AS peak_kw
+            FROM bucket_facility
+            GROUP BY measured_at
+        )
+        SELECT
+            measured_at,
+            peak_kw
+        FROM plant_bucket
+        ORDER BY peak_kw DESC, measured_at DESC
+        LIMIT 1
+    </select>
+
+    <select id="findElectricityBillingUsageIntervals" resultMap="ElectricityBillingUsageIntervalResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                electricity_kwh,
+                LAG(electricity_kwh) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_electricity_kwh
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND electricity_kwh IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+        ),
+        usage_by_timestamp AS (
+            SELECT
+                measured_at,
+                COALESCE(SUM(
+                    CASE
+                        WHEN previous_electricity_kwh IS NULL THEN 0
+                        WHEN electricity_kwh &gt;= previous_electricity_kwh THEN electricity_kwh - previous_electricity_kwh
+                        ELSE 0
+                    END
+                ), 0) AS usage_kwh
+            FROM ordered_measurements
+            GROUP BY measured_at
+        )
+        SELECT
+            measured_at,
+            ROUND(usage_kwh, 4) AS usage_kwh
+        FROM usage_by_timestamp
+        WHERE usage_kwh &gt; 0
+        ORDER BY measured_at ASC
     </select>
 
     <select id="findUtilityHourlyUsage" resultMap="UtilityHourlyUsageResultMap">
