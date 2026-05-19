@@ -13,10 +13,13 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartfactory.scada.chatbot.config.OpenAiProperties;
 import com.smartfactory.scada.chatbot.domain.ChatbotMessage;
+import com.smartfactory.scada.chatbot.dto.ChatbotAiResponse;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -30,6 +33,7 @@ public class OpenAiChatbotClient {
 		Do not guess numbers, causes, or plant states that are not present in the reference data.
 		If active alarms or abnormal facilities exist, mention them before general energy or ESG summaries.
 		Use alarm level, alarm type, alarm message, facility name, and facility status only when they are present.
+		When web search results are available, use them only for external context and clearly separate them from internal SCADA data.
 		For trend questions, use the dailyEnergyTrend and trendInsights data with dates and units.
 		For line usage questions, use facilityLineUsageSummary and name the top facilities when available.
 		When mentioning electricity, use kWh. When mentioning peak power, use kW.
@@ -39,16 +43,18 @@ public class OpenAiChatbotClient {
 
 	private final OpenAiProperties properties;
 	private final RestClient restClient;
+	private final ObjectMapper objectMapper;
 
-	public OpenAiChatbotClient(OpenAiProperties properties, RestClient.Builder restClientBuilder) {
+	public OpenAiChatbotClient(OpenAiProperties properties, RestClient.Builder restClientBuilder, ObjectMapper objectMapper) {
 		this.properties = properties;
+		this.objectMapper = objectMapper;
 		this.restClient = restClientBuilder
 			.baseUrl(properties.normalizedBaseUrl())
 			.requestFactory(requestFactory(properties.timeoutSeconds()))
 			.build();
 	}
 
-	public Optional<String> generateAnswer(
+	public Optional<ChatbotAiResponse> generateResponse(
 		String question,
 		String referencedData,
 		List<ChatbotMessage> recentMessages
@@ -66,15 +72,35 @@ public class OpenAiChatbotClient {
 				.retrieve()
 				.body(JsonNode.class);
 
-			return extractOutputText(response);
+			return extractResponse(response);
+		}
+		catch (RestClientResponseException exception) {
+			log.warn(
+				"OpenAI chatbot response generation failed. status={}, body={}",
+				exception.getStatusCode(),
+				truncate(exception.getResponseBodyAsString(), 500)
+			);
+			return Optional.empty();
 		}
 		catch (RestClientException exception) {
-			log.warn("OpenAI chatbot response generation failed. reason={}", exception.getClass().getSimpleName());
+			log.warn("OpenAI chatbot response generation failed. reason={}, message={}", exception.getClass().getSimpleName(), exception.getMessage());
 			return Optional.empty();
 		}
 	}
 
+	public Optional<String> generateAnswer(
+		String question,
+		String referencedData,
+		List<ChatbotMessage> recentMessages
+	) {
+		return generateResponse(question, referencedData, recentMessages).map(ChatbotAiResponse::answer);
+	}
+
 	Optional<String> extractOutputText(JsonNode response) {
+		return extractResponse(response).map(ChatbotAiResponse::answer);
+	}
+
+	Optional<ChatbotAiResponse> extractResponse(JsonNode response) {
 		if (response == null || response.hasNonNull("error")) {
 			return Optional.empty();
 		}
@@ -83,19 +109,34 @@ public class OpenAiChatbotClient {
 		}
 
 		List<String> outputTexts = new ArrayList<>();
+		List<Map<String, String>> sources = new ArrayList<>();
+		String imageDataUrl = null;
 		for (JsonNode outputItem : response.path("output")) {
+			if ("image_generation_call".equals(outputItem.path("type").asText())) {
+				String imageBase64 = outputItem.path("result").asText("");
+				if (!imageBase64.isBlank()) {
+					imageDataUrl = "data:image/png;base64," + imageBase64;
+				}
+			}
 			for (JsonNode contentItem : outputItem.path("content")) {
 				if ("output_text".equals(contentItem.path("type").asText())) {
 					String text = contentItem.path("text").asText("");
 					if (!text.isBlank()) {
 						outputTexts.add(text.trim());
 					}
+					extractSources(contentItem.path("annotations"), sources);
 				}
 			}
 		}
 
 		String answer = String.join("\n", outputTexts).trim();
-		return answer.isBlank() ? Optional.empty() : Optional.of(answer);
+		if (answer.isBlank() && imageDataUrl == null) {
+			return Optional.empty();
+		}
+		if (answer.isBlank()) {
+			answer = "요청한 이미지를 생성했습니다.";
+		}
+		return Optional.of(new ChatbotAiResponse(answer, null, imageDataUrl, serializeSources(sources)));
 	}
 
 	private Map<String, Object> buildRequestBody(
@@ -107,7 +148,12 @@ public class OpenAiChatbotClient {
 		body.put("model", properties.getModel());
 		body.put("instructions", INSTRUCTIONS);
 		body.put("input", buildInput(question, referencedData, recentMessages));
-		body.put("max_output_tokens", properties.maxOutputTokens());
+		body.put("max_output_tokens", Math.max(properties.maxOutputTokens(), 900));
+		List<Map<String, Object>> tools = buildTools(question);
+		if (!tools.isEmpty()) {
+			body.put("tools", tools);
+			body.put("tool_choice", "auto");
+		}
 		return body;
 	}
 
@@ -144,6 +190,87 @@ public class OpenAiChatbotClient {
 			return "";
 		}
 		return value.length() <= maxLength ? value : value.substring(0, maxLength) + "...";
+	}
+
+	private List<Map<String, Object>> buildTools(String question) {
+		List<Map<String, Object>> tools = new ArrayList<>();
+		if (properties.isWebSearchEnabled() && shouldUseWebSearch(question)) {
+			Map<String, Object> webSearch = new LinkedHashMap<>();
+			webSearch.put("type", "web_search_preview");
+			webSearch.put("search_context_size", "medium");
+			webSearch.put("user_location", Map.of(
+				"type", "approximate",
+				"country", "KR",
+				"timezone", "Asia/Seoul"
+			));
+			tools.add(webSearch);
+		}
+		if (properties.isFileSearchEnabled() && properties.hasVectorStoreId()) {
+			tools.add(Map.of(
+				"type", "file_search",
+				"vector_store_ids", List.of(properties.getVectorStoreId())
+			));
+		}
+		if (properties.isImageGenerationEnabled() && shouldGenerateImage(question)) {
+			tools.add(Map.of("type", "image_generation"));
+		}
+		return tools;
+	}
+
+	private boolean shouldUseWebSearch(String question) {
+		String normalizedQuestion = normalize(question);
+		return containsAny(
+			normalizedQuestion,
+			"외부", "검색", "최신", "뉴스", "인터넷", "웹", "시장", "전력거래", "탄소배출권", "정책", "규제",
+			"날씨", "기상", "전기요금", "요금", "원자재", "비교 자료"
+		);
+	}
+
+	private boolean shouldGenerateImage(String question) {
+		String normalizedQuestion = normalize(question);
+		return containsAny(normalizedQuestion, "이미지", "그림", "도식", "인포그래픽", "시각 자료", "포스터", "도출");
+	}
+
+	private boolean containsAny(String value, String... keywords) {
+		for (String keyword : keywords) {
+			if (value.contains(keyword)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private String normalize(String value) {
+		return value == null ? "" : value.toLowerCase();
+	}
+
+	private void extractSources(JsonNode annotations, List<Map<String, String>> sources) {
+		if (annotations == null || !annotations.isArray()) {
+			return;
+		}
+		for (JsonNode annotation : annotations) {
+			String type = annotation.path("type").asText("");
+			String url = annotation.path("url").asText("");
+			if (!"url_citation".equals(type) || url.isBlank()) {
+				continue;
+			}
+			Map<String, String> source = new LinkedHashMap<>();
+			source.put("title", annotation.path("title").asText(url));
+			source.put("url", url);
+			sources.add(source);
+		}
+	}
+
+	private String serializeSources(List<Map<String, String>> sources) {
+		if (sources.isEmpty()) {
+			return null;
+		}
+		try {
+			return objectMapper.writeValueAsString(sources);
+		}
+		catch (Exception exception) {
+			return null;
+		}
 	}
 
 	private SimpleClientHttpRequestFactory requestFactory(int timeoutSeconds) {

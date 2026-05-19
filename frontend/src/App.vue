@@ -17,6 +17,8 @@ import {
   Search,
   Send,
   SunMedium,
+  Trash2,
+  UserPlus,
   Zap,
 } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
@@ -43,6 +45,8 @@ const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
 const chatbotQuestion = ref('')
 const chatbotSending = ref(false)
+const chatbotDeletingId = ref(null)
+const userCreating = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
@@ -64,6 +68,7 @@ const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
 const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
+const PLANT_PEAK_THRESHOLD_KW = 8500
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
@@ -78,6 +83,15 @@ const nowLabel = computed(() =>
 const loginForm = reactive({
   email: 'admin@scada.com',
   password: 'Password123!',
+})
+
+const userCreateForm = reactive({
+  email: '',
+  password: '',
+  name: '',
+  phone: '',
+  plantId: '',
+  role: 'VIEWER',
 })
 
 const state = reactive({
@@ -341,8 +355,17 @@ const facilityEquipmentCards = computed(() => {
   return cards.map((facility) => {
     const key = energyKey(selectedPlantId.value, facility.facilityId)
     const live = liveEnergyByFacility.get(key)
-    if (!live) {
-      return facility
+    const hasTodayMeasuredData = formatDate(facility.latestMeasuredAt) === formatDateInput(new Date())
+    const liveIsToday = formatDate(live?.measuredAt) === formatDateInput(new Date())
+    const baseUsage = hasTodayMeasuredData ? Number(facility.todayUsageKwh || 0) : 0
+    if (!live || !liveIsToday) {
+      const monthlyAverage = Number(facility.monthlyAverageKwh || 0)
+      return {
+        ...facility,
+        todayUsageKwh: baseUsage,
+        todayVsMonthlyAverageRate: calculateChangeRate(baseUsage, monthlyAverage),
+        latestMeasuredAt: hasTodayMeasuredData ? facility.latestMeasuredAt : null,
+      }
     }
 
     const liveUsage = dailyLiveUsage(
@@ -351,8 +374,7 @@ const facilityEquipmentCards = computed(() => {
       selectedEnergyMetricKeys.value.camel,
       selectedEnergyMetricKeys.value.snake,
     )
-    const realtimeUsage = estimatedRealtimeUsage(facility, live)
-    const displayUsage = Number(facility.todayUsageKwh || 0) + Number(liveUsage || 0) + realtimeUsage
+    const displayUsage = baseUsage + Number(liveUsage || 0)
     const monthlyAverage = Number(facility.monthlyAverageKwh || 0)
     return {
       ...facility,
@@ -826,7 +848,7 @@ const peakUsageRate = computed(() => {
   const peak = Number(
     metricValue(liveEnergySource.value, 'peakKw', 'peak_kw') ?? metricValue(latestSummary.value, 'peakKw', 'peak_kw') ?? 0,
   )
-  return peak ? Math.min(Math.round((peak / 1400) * 100), 999) : 0
+  return peak ? Math.min(Math.round((peak / PLANT_PEAK_THRESHOLD_KW) * 100), 999) : 0
 })
 
 const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
@@ -837,9 +859,8 @@ const peakMetrics = computed(() => {
     return metrics
   }
 
-  const elapsedSeconds = selectedPlantRealtimeElapsedSeconds.value
-  const currentKw = metricNumber(live, 'peakKw', 'peak_kw') + (elapsedSeconds * 0.8)
-  const thresholdKw = Number(metrics.thresholdKw || 1400)
+  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const thresholdKw = Number(metrics.thresholdKw || PLANT_PEAK_THRESHOLD_KW)
   const intervalPoints = peakTrendPoints.value
   const currentIntervalAt = live.measuredAt
   const recentCutoff = Date.parse(currentIntervalAt || '') - 15 * 60 * 1000
@@ -850,10 +871,10 @@ const peakMetrics = computed(() => {
   const recentPeaks = recentRows.map((row) => metricNumber(row, 'peakKw', 'peak_kw')).filter((value) => value > 0)
   const intervalAverageKw = recentPeaks.length
     ? recentPeaks.reduce((sum, value) => sum + value, 0) / recentPeaks.length
-    : metrics.intervalAverageKw
+    : Math.min(currentKw, Number(metrics.intervalAverageKw || currentKw * 0.96))
   const intervalMaxKw = recentPeaks.length
     ? Math.max(...recentPeaks)
-    : metrics.intervalMaxKw
+    : Math.max(currentKw, Number(metrics.intervalMaxKw || currentKw))
   return {
     ...metrics,
     currentKw,
@@ -1434,6 +1455,45 @@ function statusLabel(status) {
   return labels[status] || status || '-'
 }
 
+function resetUserCreateForm() {
+  userCreateForm.email = ''
+  userCreateForm.password = ''
+  userCreateForm.name = ''
+  userCreateForm.phone = ''
+  userCreateForm.plantId = ''
+  userCreateForm.role = 'VIEWER'
+}
+
+async function submitUserCreate() {
+  if (userCreating.value) {
+    return
+  }
+
+  userCreating.value = true
+  try {
+    await run(async () => {
+      const createdUser = await api.signup({
+        email: userCreateForm.email.trim(),
+        password: userCreateForm.password,
+        name: userCreateForm.name.trim(),
+        phone: userCreateForm.phone.trim() || null,
+        plantId: userCreateForm.plantId ? Number(userCreateForm.plantId) : null,
+      })
+      if (userCreateForm.role && userCreateForm.role !== 'VIEWER') {
+        await api.updateUser(createdUser.userId, {
+          role: userCreateForm.role,
+          plantId: userCreateForm.plantId ? Number(userCreateForm.plantId) : null,
+        })
+      }
+      resetUserCreateForm()
+      const users = await api.users({ page: 0, size: 20 })
+      state.users = users.items || []
+    })
+  } finally {
+    userCreating.value = false
+  }
+}
+
 async function run(task) {
   loading.value = true
   errorMessage.value = ''
@@ -1619,8 +1679,156 @@ async function submitChatbotQuestion() {
   }
 }
 
+async function deleteChatbotMessage(messageId) {
+  if (!messageId || chatbotDeletingId.value) {
+    return
+  }
+
+  chatbotDeletingId.value = messageId
+  try {
+    await run(async () => {
+      await api.deleteChatbotMessage(messageId)
+      state.chatbotMessages = state.chatbotMessages.filter((message) => Number(message.id) !== Number(messageId))
+    })
+  } finally {
+    chatbotDeletingId.value = null
+  }
+}
+
 function useSuggestedQuestion(question) {
   chatbotQuestion.value = question
+}
+
+function markdownBlocks(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const blocks = []
+  let paragraph = []
+  let list = []
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return
+    }
+    blocks.push({ type: 'paragraph', text: paragraph.join(' ') })
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!list.length) {
+      return
+    }
+    blocks.push({ type: 'list', items: list })
+    list = []
+  }
+
+  lines.forEach((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      flushParagraph()
+      flushList()
+      return
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/)
+    if (headingMatch) {
+      flushParagraph()
+      flushList()
+      blocks.push({ type: `h${headingMatch[1].length}`, text: headingMatch[2] })
+      return
+    }
+
+    const listMatch = trimmed.match(/^[-*]\s+(.+)$/)
+    if (listMatch) {
+      flushParagraph()
+      list.push(listMatch[1])
+      return
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/)
+    if (orderedMatch) {
+      flushParagraph()
+      list.push(orderedMatch[1])
+      return
+    }
+
+    flushList()
+    paragraph.push(trimmed)
+  })
+
+  flushParagraph()
+  flushList()
+  return blocks.length ? blocks : [{ type: 'paragraph', text: String(text || '') }]
+}
+
+function parseChatbotJson(value, fallback = null) {
+  if (!value) {
+    return fallback
+  }
+  if (typeof value === 'object') {
+    return value
+  }
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
+}
+
+function chatbotChartSpec(message) {
+  const spec = parseChatbotJson(message?.chartSpec)
+  if (!spec || !Array.isArray(spec.series) || !spec.series.length) {
+    return null
+  }
+  return spec
+}
+
+function chatbotSources(message) {
+  const sources = parseChatbotJson(message?.externalSources, [])
+  return Array.isArray(sources) ? sources.filter((source) => source?.url) : []
+}
+
+function chatbotImageDataUrl(message) {
+  return message?.imageDataUrl || ''
+}
+
+function chatbotChartMax(spec) {
+  const values = spec.series.flatMap((series) => Array.isArray(series.values) ? series.values : [])
+  const maxValue = Math.max(...values.map((value) => Number(value) || 0), 0)
+  return maxValue > 0 ? maxValue : 1
+}
+
+function chatbotLinePoints(spec, series) {
+  const values = Array.isArray(series.values) ? series.values : []
+  const maxValue = chatbotChartMax(spec)
+  const width = 520
+  const height = 210
+  const padX = 28
+  const padY = 22
+  return values
+    .map((value, index) => {
+      const x = values.length <= 1
+        ? width / 2
+        : padX + (index * (width - padX * 2)) / (values.length - 1)
+      const y = height - padY - ((Number(value) || 0) / maxValue) * (height - padY * 2)
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
+function chatbotChartRows(spec) {
+  const labels = Array.isArray(spec.labels) ? spec.labels : []
+  const firstSeries = spec.series?.[0] || {}
+  const values = Array.isArray(firstSeries.values) ? firstSeries.values : []
+  const maxValue = chatbotChartMax(spec)
+  return values.map((value, index) => ({
+    label: labels[index] || firstSeries.name || `항목 ${index + 1}`,
+    value: Number(value) || 0,
+    rate: Math.max(3, Math.min(100, ((Number(value) || 0) / maxValue) * 100)),
+    color: firstSeries.color || '#0f6fff',
+  }))
+}
+
+function formatChatbotChartValue(value, unit) {
+  return `${formatNumber(value)}${unit ? ` ${unit}` : ''}`
 }
 
 async function loadEnergyData() {
@@ -1664,30 +1872,38 @@ async function loadEnergyData() {
   state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   state.facilityLineUsages = facilityLineUsages
   if (selectedFacilityDateIsToday.value) {
-    await preloadFacilityLineLiveEnergy(facilityLineUsages)
+    await preloadPlantLiveEnergy(selectedFacilityDate.value, endOfFacilityQueryDate())
   }
   await loadFacilityDetail()
   startEnergyWebSocket()
   startEnergyPolling()
 }
 
-async function preloadFacilityLineLiveEnergy(facilityLineUsages = []) {
-  if (!selectedPlantId.value || !facilityLineUsages.length) {
+async function preloadPlantLiveEnergy(dateValue = formatDateInput(new Date()), toValue = formatDateTimeInput(new Date())) {
+  if (!selectedPlantId.value) {
     return
   }
 
-  const facilityIds = new Set(facilityLineUsages.map((facility) => Number(facility.facilityId)))
+  const facilityIds = new Set(allLineFacilityIds(selectedPlantId.value))
   const rows = await api.energyMeasurements({
     plantId: selectedPlantId.value,
-    from: `${selectedFacilityDate.value}T00:00:00`,
-    to: endOfFacilityQueryDate(),
-    limit: 500,
+    from: `${dateValue}T00:00:00`,
+    to: toValue,
+    limit: 5000,
   }).catch(() => [])
 
+  rememberLatestRowsByFacility(rows, facilityIds)
+}
+
+function rememberLatestRowsByFacility(rows = [], facilityIds = null) {
   const rowsByFacility = new Map()
-  rows
+  ;(rows || [])
     .map(normalizeEnergyMessage)
-    .filter((message) => message && facilityIds.has(Number(message.facilityId)))
+    .filter((message) =>
+      message &&
+      isLineFacilityId(message.facilityId, selectedPlantId.value) &&
+      (!facilityIds || facilityIds.has(Number(message.facilityId)))
+    )
     .forEach((message) => {
       const key = energyKey(message.plantId, message.facilityId)
       const list = rowsByFacility.get(key) || []
@@ -1695,12 +1911,14 @@ async function preloadFacilityLineLiveEnergy(facilityLineUsages = []) {
       rowsByFacility.set(key, list)
     })
 
-  facilityLineUsages.forEach((facility) => {
-    const key = energyKey(selectedPlantId.value, facility.facilityId)
-    const list = rowsByFacility.get(key) || []
-    const latest = list[0] || null
+  rowsByFacility.forEach((list, key) => {
+    const sorted = [...list].sort((a, b) => Date.parse(b.measuredAt || '') - Date.parse(a.measuredAt || ''))
+    const latest = sorted[0] || null
+    if (!latest) {
+      return
+    }
     const baseline = latest
-    if (!liveEnergyBaselineByFacility.has(key) && baseline) {
+    if (!liveEnergyBaselineByFacility.has(key) || formatDate(liveEnergyBaselineByFacility.get(key)?.measuredAt) !== formatDateInput(new Date())) {
       liveEnergyBaselineByFacility.set(key, baseline)
     }
     rememberEnergyMessage(latest)
@@ -1757,6 +1975,9 @@ async function loadPeakDashboard() {
     date: selectedPeakDate.value || undefined,
     period: selectedPeakPeriod.value,
   })
+  if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
+    await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
+  }
   startEnergyWebSocket()
   startEnergyPolling()
 }
@@ -1772,6 +1993,9 @@ async function loadUtilityDashboard() {
     date: selectedUtilityDate.value || undefined,
     period: selectedUtilityPeriod.value,
   })
+  if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
+    await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
+  }
   startEnergyWebSocket()
   startEnergyPolling()
 }
@@ -1796,35 +2020,21 @@ async function loadLatestEnergy() {
   }
 
   if (activePage.value === 'facility' && selectedFacilityDateIsToday.value) {
-    const visibleFacilityIds = new Set(
-      (state.facilityLineUsages.length
-        ? state.facilityLineUsages.map((facility) => Number(facility.facilityId))
-        : allLineFacilityIds(selectedPlantId.value))
-    )
+    const visibleFacilityIds = new Set(allLineFacilityIds(selectedPlantId.value))
     let rows = []
     try {
       rows = await api.energyMeasurements({
         plantId: selectedPlantId.value,
         from: `${formatDateInput(new Date())}T00:00:00`,
         to: formatDateTimeInput(new Date()),
-        limit: 2000,
+        limit: 5000,
       })
       markLatestEnergyPollSuccess()
     } catch {
       markLatestEnergyPollFailure()
       return
     }
-    const seenFacilityIds = new Set()
-    rows
-      .map(normalizeEnergyMessage)
-      .filter((message) => message && visibleFacilityIds.has(Number(message.facilityId)))
-      .forEach((message) => {
-        if (seenFacilityIds.has(message.facilityId)) {
-          return
-        }
-        seenFacilityIds.add(message.facilityId)
-        rememberEnergyMessage(message)
-      })
+    rememberLatestRowsByFacility(rows, visibleFacilityIds)
     state.latestEnergy = selectedLiveEnergy.value || Array.from(liveEnergyByFacility.values()).find((message) =>
       visibleFacilityIds.has(Number(message.facilityId))
     ) || null
@@ -1850,24 +2060,14 @@ async function loadLatestEnergy() {
       plantId: selectedPlantId.value,
       from: `${formatDateInput(new Date())}T00:00:00`,
       to: formatDateTimeInput(new Date()),
-      limit: 500,
+      limit: 5000,
     })
     markLatestEnergyPollSuccess()
   } catch {
     markLatestEnergyPollFailure()
     return
   }
-  const seenFacilityIds = new Set()
-  rows
-    .map(normalizeEnergyMessage)
-    .filter((message) => message && isLineFacilityId(message.facilityId, selectedPlantId.value))
-    .forEach((message) => {
-      if (seenFacilityIds.has(message.facilityId)) {
-        return
-      }
-      seenFacilityIds.add(message.facilityId)
-      rememberEnergyMessage(message)
-    })
+  rememberLatestRowsByFacility(rows, new Set(allLineFacilityIds(selectedPlantId.value)))
   state.latestEnergy = selectedLiveEnergy.value || null
   if (activePage.value === 'peak') {
     schedulePeakRefresh()
@@ -2537,7 +2737,7 @@ onUnmounted(() => {
             <span class="peak-card-icon blue"><Zap :size="22" /></span>
             <div>
               <p>현재 전력 사용량</p>
-              <b>{{ formatNumber(peakMetrics.currentKw) }}<small> kW</small></b>
+              <b class="peak-value">{{ formatNumber(peakMetrics.currentKw, 0) }}<small>kW</small></b>
               <em>측정 {{ formatTime(peakMetrics.measuredAt) }}</em>
             </div>
           </article>
@@ -2627,8 +2827,8 @@ onUnmounted(() => {
             </div>
             <div class="peak-gauge" :style="peakGaugeStyle">
               <div>
-                <strong>{{ formatNumber(peakMetrics.currentKw, 0) }} kW</strong>
-                <span>사용률 {{ formatNumber(peakMetrics.peakUsageRate) }}% / 기준 {{ formatNumber(peakMetrics.thresholdKw, 0) }} kW</span>
+                <strong class="peak-gauge-value">{{ formatNumber(peakMetrics.currentKw, 0) }}<small>kW</small></strong>
+                <span class="peak-gauge-caption">사용률 {{ formatNumber(peakMetrics.peakUsageRate) }}% / 기준 {{ formatNumber(peakMetrics.thresholdKw, 0) }}&nbsp;kW</span>
               </div>
             </div>
             <div class="peak-scale">
@@ -3169,8 +3369,81 @@ onUnmounted(() => {
                     <Bot :size="16" />
                     {{ message.plantName || selectedPlant?.name || 'SCADA AI' }}
                     <small>{{ formatDateTime(message.createdAt) }}</small>
+                    <button
+                      class="chatbot-delete-button"
+                      type="button"
+                      :disabled="chatbotDeletingId === message.id"
+                      title="메시지 삭제"
+                      @click="deleteChatbotMessage(message.id)"
+                    >
+                      <Trash2 :size="14" />
+                    </button>
                   </span>
-                  <p>{{ message.answer }}</p>
+                  <div class="chatbot-markdown">
+                    <template
+                      v-for="(block, blockIndex) in markdownBlocks(message.answer)"
+                      :key="`${message.id}-markdown-${blockIndex}`"
+                    >
+                      <h3 v-if="block.type === 'h1'">{{ block.text }}</h3>
+                      <h4 v-else-if="block.type === 'h2'">{{ block.text }}</h4>
+                      <h5 v-else-if="block.type === 'h3'">{{ block.text }}</h5>
+                      <ul v-else-if="block.type === 'list'">
+                        <li v-for="item in block.items" :key="item">{{ item }}</li>
+                      </ul>
+                      <p v-else>{{ block.text }}</p>
+                    </template>
+                  </div>
+                  <div v-if="chatbotChartSpec(message)" class="chatbot-chart-card">
+                    <div class="chatbot-chart-head">
+                      <strong>{{ chatbotChartSpec(message).title || '데이터 차트' }}</strong>
+                      <small>{{ chatbotChartSpec(message).unit || '' }}</small>
+                    </div>
+
+                    <svg
+                      v-if="chatbotChartSpec(message).type === 'line'"
+                      class="chatbot-line-chart"
+                      viewBox="0 0 520 210"
+                      role="img"
+                      :aria-label="chatbotChartSpec(message).title || 'line chart'"
+                    >
+                      <line x1="28" y1="188" x2="492" y2="188" />
+                      <line x1="28" y1="22" x2="28" y2="188" />
+                      <polyline
+                        v-for="series in chatbotChartSpec(message).series"
+                        :key="series.name"
+                        :points="chatbotLinePoints(chatbotChartSpec(message), series)"
+                        :stroke="series.color || '#0f6fff'"
+                      />
+                    </svg>
+
+                    <div v-else class="chatbot-chart-bars">
+                      <div v-for="row in chatbotChartRows(chatbotChartSpec(message))" :key="row.label" class="chatbot-chart-row">
+                        <span>{{ row.label }}</span>
+                        <div><i :style="{ width: `${row.rate}%`, background: row.color }"></i></div>
+                        <b>{{ formatChatbotChartValue(row.value, chatbotChartSpec(message).unit) }}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <img
+                    v-if="chatbotImageDataUrl(message)"
+                    class="chatbot-generated-image"
+                    :src="chatbotImageDataUrl(message)"
+                    alt="AI generated visual"
+                  />
+
+                  <div v-if="chatbotSources(message).length" class="chatbot-source-list">
+                    <strong>외부 검색 출처</strong>
+                    <a
+                      v-for="source in chatbotSources(message)"
+                      :key="source.url"
+                      :href="source.url"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {{ source.title || source.url }}
+                    </a>
+                  </div>
                 </div>
               </article>
 
@@ -3218,7 +3491,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-else-if="activePage === 'users'" class="page-stack">
+      <section v-else-if="activePage === 'users'" class="page-stack users-page">
         <article class="panel table-panel">
           <h2>사용자 목록</h2>
           <table>
@@ -3236,6 +3509,51 @@ onUnmounted(() => {
             </tbody>
           </table>
         </article>
+
+        <aside class="panel user-create-panel">
+          <div class="panel-title inline">
+            <h2>회원 등록</h2>
+            <UserPlus :size="20" />
+          </div>
+
+          <form class="user-create-form" @submit.prevent="submitUserCreate">
+            <label>
+              <span>이메일</span>
+              <input v-model.trim="userCreateForm.email" type="email" placeholder="user@example.com" required />
+            </label>
+            <label>
+              <span>비밀번호</span>
+              <input v-model="userCreateForm.password" type="password" minlength="8" placeholder="8자 이상" required />
+            </label>
+            <label>
+              <span>이름</span>
+              <input v-model.trim="userCreateForm.name" type="text" placeholder="홍길동" required />
+            </label>
+            <label>
+              <span>연락처</span>
+              <input v-model.trim="userCreateForm.phone" type="tel" placeholder="010-0000-0000" />
+            </label>
+            <label>
+              <span>사업장</span>
+              <select v-model="userCreateForm.plantId">
+                <option value="">전체/미지정</option>
+                <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
+              </select>
+            </label>
+            <label>
+              <span>권한</span>
+              <select v-model="userCreateForm.role">
+                <option value="VIEWER">조회자</option>
+                <option value="OPERATOR">운영자</option>
+                <option value="MANAGER">관리자</option>
+                <option v-if="isAdminUser" value="ADMIN">통합 관리자</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit" :disabled="userCreating">
+              <UserPlus :size="17" /> {{ userCreating ? '등록 중' : '등록' }}
+            </button>
+          </form>
+        </aside>
       </section>
 
       <section v-else class="page-stack">

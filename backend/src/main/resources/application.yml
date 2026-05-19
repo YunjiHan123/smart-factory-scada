@@ -55,6 +55,10 @@ openai:
   base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
   timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:10}
   max-output-tokens: ${OPENAI_MAX_OUTPUT_TOKENS:600}
+  web-search-enabled: ${OPENAI_WEB_SEARCH_ENABLED:true}
+  image-generation-enabled: ${OPENAI_IMAGE_GENERATION_ENABLED:true}
+  file-search-enabled: ${OPENAI_FILE_SEARCH_ENABLED:true}
+  vector-store-id: ${OPENAI_VECTOR_STORE_ID:}
 
 management:
   endpoints:

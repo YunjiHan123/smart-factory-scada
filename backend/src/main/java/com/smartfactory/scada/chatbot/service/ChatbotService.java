@@ -25,10 +25,12 @@ import com.smartfactory.scada.alarm.mapper.AlarmMapper;
 import com.smartfactory.scada.auth.exception.AuthErrorCode;
 import com.smartfactory.scada.auth.security.AuthenticatedUser;
 import com.smartfactory.scada.chatbot.domain.ChatbotMessage;
+import com.smartfactory.scada.chatbot.dto.ChatbotAiResponse;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageRequest;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
+import com.smartfactory.scada.common.exception.CommonErrorCode;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
@@ -76,17 +78,21 @@ public class ChatbotService {
 			plantId,
 			OPENAI_CONTEXT_MESSAGE_LIMIT
 		);
-		String answer = plantId == null
-			? buildFallbackAnswer(operationalContext)
-			: openAiChatbotClient.generateAnswer(question, referencedData, recentMessages)
-				.orElseGet(() -> buildFallbackAnswer(operationalContext));
+		ChatbotAiResponse generatedResponse = plantId == null
+			? ChatbotAiResponse.answerOnly(buildFallbackAnswer(operationalContext))
+			: openAiChatbotClient.generateResponse(question, referencedData, recentMessages)
+				.orElseGet(() -> ChatbotAiResponse.answerOnly(buildFallbackAnswer(operationalContext)));
+		generatedResponse = generatedResponse.withChartSpec(buildChartSpec(question, operationalContext));
 
 		ChatbotMessage message = new ChatbotMessage();
 		message.setUserId(authenticatedUser.userId());
 		message.setPlantId(plantId);
 		message.setQuestion(question);
-		message.setAnswer(answer);
+		message.setAnswer(generatedResponse.answer());
 		message.setReferencedData(referencedData);
+		message.setChartSpec(generatedResponse.chartSpec());
+		message.setImageDataUrl(generatedResponse.imageDataUrl());
+		message.setExternalSources(generatedResponse.externalSources());
 		message.setCreatedAt(LocalDateTime.now());
 
 		chatbotMapper.insert(message);
@@ -108,6 +114,21 @@ public class ChatbotService {
 			.stream()
 			.map(ChatbotMessageResponse::from)
 			.toList();
+	}
+
+	@Transactional
+	public void deleteMessage(AuthenticatedUser authenticatedUser, Long messageId) {
+		if (authenticatedUser == null) {
+			throw new BusinessException(AuthErrorCode.AUTHENTICATION_REQUIRED);
+		}
+		if (messageId == null) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		int deletedCount = chatbotMapper.deleteByIdAndUserId(messageId, authenticatedUser.userId());
+		if (deletedCount == 0) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
 	}
 
 	private String buildFallbackAnswer(OperationalContext operationalContext) {
@@ -406,6 +427,108 @@ public class ChatbotService {
 		catch (JsonProcessingException exception) {
 			return "{}";
 		}
+	}
+
+	private String buildChartSpec(String question, OperationalContext operationalContext) {
+		if (operationalContext.plantId() == null || !wantsChart(question)) {
+			return null;
+		}
+
+		Map<String, Object> chart = questionContains(question, "설비", "라인", "상위")
+			? buildFacilityUsageChart(operationalContext.facilityLineUsageSummary())
+			: questionContains(question, "비중", "구성", "믹스", "태양광", "가스", "용수")
+				? buildEnergyMixChart(operationalContext.latestEnergySummary())
+				: buildDailyTrendChart(operationalContext.dailyEnergyTrend());
+		if (chart == null) {
+			return null;
+		}
+
+		try {
+			return objectMapper.writeValueAsString(chart);
+		}
+		catch (JsonProcessingException exception) {
+			return null;
+		}
+	}
+
+	private boolean wantsChart(String question) {
+		return questionContains(question, "그래프", "차트", "시각화", "그려", "그려줘", "추이", "비교");
+	}
+
+	private boolean questionContains(String question, String... keywords) {
+		String normalizedQuestion = question == null ? "" : question;
+		for (String keyword : keywords) {
+			if (normalizedQuestion.contains(keyword)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Map<String, Object> buildDailyTrendChart(List<DailyEnergyTrendPoint> dailyEnergyTrend) {
+		if (dailyEnergyTrend == null || dailyEnergyTrend.isEmpty()) {
+			return null;
+		}
+		return Map.of(
+			"type", "line",
+			"title", "최근 7일 에너지 사용량 추이",
+			"unit", "사용량",
+			"labels", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::summaryDate).toList(),
+			"series", List.of(
+				chartSeries("전기(kWh)", "#0f6fff", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::electricityKwh).toList()),
+				chartSeries("가스(m3)", "#ff8a00", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::gasM3).toList()),
+				chartSeries("용수(ton)", "#14bfd4", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::waterTon).toList()),
+				chartSeries("태양광(kWh)", "#45c742", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::solarKwh).toList())
+			)
+		);
+	}
+
+	private Map<String, Object> buildFacilityUsageChart(FacilityLineUsageSummary facilityLineUsageSummary) {
+		if (facilityLineUsageSummary == null || facilityLineUsageSummary.topFacilities().isEmpty()) {
+			return null;
+		}
+		List<FacilityUsageItem> topFacilities = facilityLineUsageSummary.topFacilities();
+		return Map.of(
+			"type", "bar",
+			"title", "설비별 전기 사용량 상위",
+			"unit", "kWh",
+			"labels", topFacilities.stream().map(FacilityUsageItem::facilityName).toList(),
+			"series", List.of(chartSeries(
+				"금일 사용량",
+				"#0f6fff",
+				topFacilities.stream().map(FacilityUsageItem::todayUsageKwh).toList()
+			))
+		);
+	}
+
+	private Map<String, Object> buildEnergyMixChart(EnergySummary latestEnergySummary) {
+		if (latestEnergySummary == null) {
+			return null;
+		}
+		return Map.of(
+			"type", "bar",
+			"title", "최신 에너지 사용량 구성",
+			"unit", "현재 집계값",
+			"labels", List.of("전기(kWh)", "가스(m3)", "용수(ton)", "태양광(kWh)"),
+			"series", List.of(chartSeries(
+				"에너지",
+				"#0f6fff",
+				List.of(
+					zeroIfNull(latestEnergySummary.getElectricityKwh()),
+					zeroIfNull(latestEnergySummary.getGasM3()),
+					zeroIfNull(latestEnergySummary.getWaterTon()),
+					zeroIfNull(latestEnergySummary.getSolarKwh())
+				)
+			))
+		);
+	}
+
+	private Map<String, Object> chartSeries(String name, String color, List<BigDecimal> values) {
+		return Map.of(
+			"name", name,
+			"color", color,
+			"values", values.stream().map(this::zeroIfNull).toList()
+		);
 	}
 
 	private record OperationalContext(
