@@ -2132,12 +2132,6 @@ async function loadDashboardData() {
   state.esgScores = esgScores
 }
 
-async function loadAlarms() {
-  state.alarms = await api.alarms({
-    plantId: selectedPlantId.value || undefined,
-    status: 'OCCURRED',
-    limit: 100,
-  })
 async function loadAlarms(options = {}) {
   const { silent = false } = options || {}
   const requestId = ++alarmsRequestId
@@ -4578,8 +4572,6 @@ onUnmounted(() => {
       </section>
 
       <section v-else-if="activePage === 'alarms'" class="page-stack alarm-page">
-        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
-      <section v-else class="page-stack alarm-page">
         <article v-if="alarmsLoading" class="panel table-panel alarm-tab-panel alarm-skeleton-panel" role="status" aria-live="polite">
           <span class="sr-only">알람 목록을 불러오는 중입니다.</span>
           <div class="panel-title inline alarm-panel-title">
