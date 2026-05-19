@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
 import com.smartfactory.scada.energy.websocket.EnergyRealtimeWebSocketHandler;
+import com.smartfactory.scada.facility.mapper.FacilityMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,25 +31,30 @@ public class EnergyMeasurementMqttService {
 	private final ObjectMapper objectMapper;
 	private final EnergyService energyService;
 	private final EnergyRealtimeWebSocketHandler energyRealtimeWebSocketHandler;
+	private final FacilityMapper facilityMapper;
 	private final Map<String, LegacyMeasurementSnapshot> latestLegacyMeasurements = new ConcurrentHashMap<>();
 	private final Map<String, EnergyMeasurementMessage> latestGeneratedMeasurements = new ConcurrentHashMap<>();
 
 	public void handleMessage(String topic, String payload) {
 		try {
-			EnergyMeasurementMessage message = objectMapper.readValue(payload, EnergyMeasurementMessage.class);
-			List<EnergyMeasurementMessage> normalizedMessages = normalizeLegacyMeasurements(message);
-			if (normalizedMessages.isEmpty()) {
-				log.debug(
-					"MQTT energy message skipped. topic={}, plantId={}, facilityId={}, measuredAt={}",
-					topic,
-					message.getPlantId(),
-					message.getFacilityId(),
-					message.getMeasuredAt()
-				);
-				return;
-			}
+			EnergyMeasurementMessage message = withTopicIds(
+				topic,
+				objectMapper.readValue(payload, EnergyMeasurementMessage.class)
+			);
+			List<EnergyMeasurementMessage> normalizedMessages = normalizeLineMeasurement(message);
 
 			for (EnergyMeasurementMessage normalizedMessage : normalizedMessages) {
+				if (!facilityExists(normalizedMessage)) {
+					log.warn(
+						"MQTT energy message skipped because facility does not exist. topic={}, plantId={}, facilityId={}, measuredAt={}",
+						topic,
+						normalizedMessage.getPlantId(),
+						normalizedMessage.getFacilityId(),
+						normalizedMessage.getMeasuredAt()
+					);
+					continue;
+				}
+
 				log.info(
 					"MQTT energy message received. topic={}, plantId={}, facilityId={}, measuredAt={}",
 					topic,
@@ -70,54 +76,83 @@ public class EnergyMeasurementMqttService {
 		}
 	}
 
-	private List<EnergyMeasurementMessage> normalizeLegacyMeasurements(EnergyMeasurementMessage message) {
+	private EnergyMeasurementMessage withTopicIds(String topic, EnergyMeasurementMessage message) {
+		if (message.getPlantId() != null && message.getFacilityId() != null) {
+			return message;
+		}
+
+		String[] topicParts = topic == null ? new String[0] : topic.split("/");
+		for (int index = 0; index < topicParts.length - 1; index += 1) {
+			if (message.getPlantId() == null && "plant".equals(topicParts[index])) {
+				message.setPlantId(parseLong(topicParts[index + 1]));
+			}
+			if (message.getFacilityId() == null && "facility".equals(topicParts[index])) {
+				message.setFacilityId(parseLong(topicParts[index + 1]));
+			}
+		}
+		return message;
+	}
+
+	private List<EnergyMeasurementMessage> normalizeLineMeasurement(EnergyMeasurementMessage message) {
 		Long plantId = message.getPlantId();
 		Long facilityId = message.getFacilityId();
 		if (plantId == null || facilityId == null) {
 			return List.of(message);
 		}
 
-		long expectedLegacyPrefix = plantId * 100L;
-		long legacySequence = facilityId - expectedLegacyPrefix;
-		if (legacySequence < 1 || legacySequence > 5) {
+		long expectedLinePrefix = plantId * 100L;
+		long lineSequence = facilityId - expectedLinePrefix;
+		if (lineSequence < 1 || lineSequence > 4) {
 			return List.of(message);
 		}
 
-		Integer firstLineSequence = switch ((int) legacySequence) {
-			case 1 -> 1;  // Press line: F-001 ~ F-006
-			case 2 -> 7;  // Body line: F-007 ~ F-012
-			case 3 -> 19; // Paint line: F-019 ~ F-024
-			case 4 -> 13; // Assembly line: F-013 ~ F-018
+		Integer firstEquipmentSequence = switch ((int) lineSequence) {
+			case 1 -> 1;
+			case 2 -> 7;
+			case 3 -> 19;
+			case 4 -> 13;
 			default -> null;
 		};
-		if (firstLineSequence == null) {
-			return List.of();
+		if (firstEquipmentSequence == null || !generatedLineFacilitiesExist(plantId, firstEquipmentSequence)) {
+			return List.of(message);
 		}
 
-		String legacyKey = measurementKey(plantId, facilityId);
-		LegacyMeasurementSnapshot previousLegacy = latestLegacyMeasurements.put(
-			legacyKey,
+		String lineKey = measurementKey(plantId, facilityId);
+		LegacyMeasurementSnapshot previousLine = latestLegacyMeasurements.put(
+			lineKey,
 			LegacyMeasurementSnapshot.from(message)
 		);
 
 		List<EnergyMeasurementMessage> generatedMessages = new ArrayList<>();
 		for (int index = 0; index < LINE_EQUIPMENT_COUNT; index += 1) {
-			long generatedFacilityId = (plantId * GENERATED_FACILITY_ID_OFFSET) + firstLineSequence + index;
+			long generatedFacilityId = (plantId * GENERATED_FACILITY_ID_OFFSET) + firstEquipmentSequence + index;
 			generatedMessages.add(toGeneratedMeasurement(
 				message,
 				generatedFacilityId,
-				distributionWeight(plantId, legacySequence, index),
-				previousLegacy
+				distributionWeight(plantId, lineSequence, index),
+				previousLine
 			));
 		}
 		return generatedMessages;
+	}
+
+	private boolean generatedLineFacilitiesExist(Long plantId, int firstEquipmentSequence) {
+		for (int index = 0; index < LINE_EQUIPMENT_COUNT; index += 1) {
+			long facilityId = (plantId * GENERATED_FACILITY_ID_OFFSET) + firstEquipmentSequence + index;
+			if (facilityMapper.findById(facilityId)
+				.filter(facility -> plantId.equals(facility.getPlantId()))
+				.isEmpty()) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private EnergyMeasurementMessage toGeneratedMeasurement(
 		EnergyMeasurementMessage source,
 		Long generatedFacilityId,
 		double weight,
-		LegacyMeasurementSnapshot previousLegacy
+		LegacyMeasurementSnapshot previousLine
 	) {
 		String generatedKey = measurementKey(source.getPlantId(), generatedFacilityId);
 		EnergyMeasurementMessage previousGenerated = latestGeneratedMeasurements.computeIfAbsent(
@@ -131,28 +166,28 @@ public class EnergyMeasurementMqttService {
 		boolean gasEstimated = sourceGas == null || sourceGas <= 0;
 		boolean waterEstimated = sourceWater == null || sourceWater <= 0;
 		boolean solarEstimated = sourceSolar == null || sourceSolar <= 0;
-		if (sourceGas == null || sourceGas <= 0) {
+		if (gasEstimated) {
 			sourceGas = estimatedGasValue(sourceElectricity, source.getPlantId(), generatedFacilityId);
 		}
-		if (sourceWater == null || sourceWater <= 0) {
+		if (waterEstimated) {
 			sourceWater = estimatedWaterValue(sourceElectricity, source.getPlantId(), generatedFacilityId);
 		}
-		if (sourceSolar == null || sourceSolar <= 0) {
+		if (solarEstimated) {
 			sourceSolar = estimatedSolarValue(sourceElectricity, source.getMeasuredAt(), source.getPlantId(), generatedFacilityId);
 		}
-		Double previousSourceWater = previousLegacy == null ? null : previousLegacy.waterTon();
-		Double previousSourceGas = previousLegacy == null ? null : previousLegacy.gasM3();
-		if (gasEstimated && previousLegacy != null) {
-			previousSourceGas = estimatedGasValue(previousLegacy.electricityKwh(), source.getPlantId(), generatedFacilityId);
+		Double previousSourceWater = previousLine == null ? null : previousLine.waterTon();
+		Double previousSourceGas = previousLine == null ? null : previousLine.gasM3();
+		if (gasEstimated && previousLine != null) {
+			previousSourceGas = estimatedGasValue(previousLine.electricityKwh(), source.getPlantId(), generatedFacilityId);
 		}
-		if (waterEstimated && previousLegacy != null) {
-			previousSourceWater = estimatedWaterValue(previousLegacy.electricityKwh(), source.getPlantId(), generatedFacilityId);
+		if (waterEstimated && previousLine != null) {
+			previousSourceWater = estimatedWaterValue(previousLine.electricityKwh(), source.getPlantId(), generatedFacilityId);
 		}
-		Double previousSourceSolar = previousLegacy == null ? null : previousLegacy.solarKwh();
-		if (solarEstimated && previousLegacy != null) {
+		Double previousSourceSolar = previousLine == null ? null : previousLine.solarKwh();
+		if (solarEstimated && previousLine != null) {
 			previousSourceSolar = estimatedSolarValue(
-				previousLegacy.electricityKwh(),
-				previousLegacy.measuredAt(),
+				previousLine.electricityKwh(),
+				previousLine.measuredAt(),
 				source.getPlantId(),
 				generatedFacilityId
 			);
@@ -165,7 +200,7 @@ public class EnergyMeasurementMqttService {
 			nextAccumulatedValue(
 				valueOf(previousGenerated == null ? null : previousGenerated.getElectricityKwh()),
 				sourceElectricity,
-				previousLegacy == null ? null : previousLegacy.electricityKwh(),
+				previousLine == null ? null : previousLine.electricityKwh(),
 				weight
 			),
 			nextAccumulatedValue(
@@ -190,6 +225,27 @@ public class EnergyMeasurementMqttService {
 		);
 		latestGeneratedMeasurements.put(generatedKey, generated);
 		return generated;
+	}
+
+	private Long parseLong(String value) {
+		try {
+			return Long.valueOf(value);
+		}
+		catch (NumberFormatException exception) {
+			return null;
+		}
+	}
+
+	private boolean facilityExists(EnergyMeasurementMessage message) {
+		if (message.getFacilityId() == null) {
+			return true;
+		}
+		if (message.getPlantId() == null) {
+			return false;
+		}
+		return facilityMapper.findById(message.getFacilityId())
+			.filter(facility -> message.getPlantId().equals(facility.getPlantId()))
+			.isPresent();
 	}
 
 	private EnergyMeasurementMessage latestGeneratedMeasurement(Long plantId, Long facilityId) {
@@ -262,9 +318,9 @@ public class EnergyMeasurementMqttService {
 		return electricityKwh * 3.2 * daylightFactor * plantFactor * facilityFactor;
 	}
 
-	private double distributionWeight(Long plantId, long legacySequence, int equipmentIndex) {
+	private double distributionWeight(Long plantId, long lineSequence, int equipmentIndex) {
 		double plantFactor = 0.84 + ((Math.floorMod(plantId, 7)) * 0.035);
-		double lineFactor = switch ((int) legacySequence) {
+		double lineFactor = switch ((int) lineSequence) {
 			case 1 -> 1.08;
 			case 2 -> 0.96;
 			case 3 -> 0.82;
