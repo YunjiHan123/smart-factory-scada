@@ -13,6 +13,7 @@ import {
   History,
   Leaf,
   ListOrdered,
+  LogOut,
   RadioReceiver,
   Search,
   Send,
@@ -23,10 +24,10 @@ import {
 } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
-const appMode = ref(getAccessToken() ? 'scada' : 'login')
-const SCADA_EXTERNAL_URL = 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
+const appMode = ref(getAccessToken() ? 'detail' : 'login')
+const SCADA_EXTERNAL_URL = import.meta.env.VITE_SMWP_SCADA_URL || 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
 const KAKAO_MAP_APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY
-const activePage = ref('facility')
+const activePage = ref('dashboard')
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedPlantId = ref(null)
@@ -98,6 +99,16 @@ const DEFAULT_PLANT_LOCATIONS = {
   5: { plantName: '현대 아산', latitude: 36.838508, longitude: 126.881593 },
   6: { plantName: '현대 전주', latitude: 35.956543, longitude: 127.134506 },
 }
+const DASHBOARD_PLANT_LAYOUT = {
+  1: { side: 'left', card: { x: 4, y: 20 } },
+  2: { side: 'left', card: { x: 4, y: 44 } },
+  3: { side: 'left', card: { x: 4, y: 68 } },
+  4: { side: 'right', card: { x: 82, y: 24 } },
+  5: { side: 'right', card: { x: 82, y: 48 } },
+  6: { side: 'right', card: { x: 82, y: 72 } },
+}
+const DASHBOARD_CARD_WIDTH = 14
+const DASHBOARD_CARD_HEIGHT = 8.8
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
@@ -143,6 +154,12 @@ const state = reactive({
   chatbotMessages: [],
 })
 
+const solutionViewer = reactive({
+  open: false,
+  plant: null,
+  url: '',
+})
+
 const energyTypeOptions = [
   { value: 'ELECTRICITY', label: '전기', unit: 'kWh', tone: 'electric', iconPath: 'M13 2 4 14h7l-2 8 9-13h-7l2-7z' },
   { value: 'GAS', label: '가스', unit: 'm3', tone: 'gas', iconPath: 'M12 22c-3.6 0-6-2.4-6-5.8 0-2.7 1.8-4.7 3.4-6.4 1.4-1.5 2.7-3 2.7-5.8 3.4 2.3 6 5.7 6 9.5 0 .5-.1 1-.2 1.4.7-.5 1.3-1.2 1.7-2.2.9 4.8-1.8 9.3-7.6 9.3z' },
@@ -155,6 +172,7 @@ const trendIconPath = 'M4 16l5-5 4 4 7-8M14 7h6v6'
 const storageIconPath = 'M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zM5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6'
 
 const navItems = [
+  { id: 'dashboard', label: '대시보드', icon: 'D' },
   { id: 'facility', label: '설비 조회', icon: 'F' },
   { id: 'peak', label: '피크 전력', icon: 'P' },
   { id: 'utility', label: '가스/용수', icon: 'U' },
@@ -164,7 +182,7 @@ const navItems = [
   { id: 'alarms', label: '알람', icon: 'A' },
 ]
 
-const validRoutes = ['facility', 'peak', 'utility', 'esg', 'chatbot', 'users', 'alarms']
+const validRoutes = ['dashboard', 'facility', 'peak', 'utility', 'esg', 'chatbot', 'users', 'alarms']
 const facilityLineOptions = [
   { value: 'PRESS', label: '프레스' },
   { value: 'BODY', label: '차체' },
@@ -216,6 +234,7 @@ const equipmentProcessNames = {
 
 const activeMeta = computed(() => {
   const meta = {
+    dashboard: ['대시보드', '사업장 환경 종합 현황도'],
     facility: ['설비별 에너지 현황', '사업장, 설비 라인, 조회일 기준의 전기 사용량을 확인합니다.'],
     peak: ['피크 전력 현황', '사업장별 피크 전력과 기준 초과 이력을 확인합니다.'],
     utility: ['가스/용수 모니터링', '가스와 용수 사용량을 시간대와 계측기 단위로 확인합니다.'],
@@ -1486,6 +1505,72 @@ const esgSchematicMap = computed(() => {
   })
 })
 
+const dashboardPlants = computed(() => {
+  const plantsById = new Map()
+  const defaultLocations = Object.entries(DEFAULT_PLANT_LOCATIONS).map(([plantId, location]) => ({
+    id: Number(plantId),
+    name: location.plantName,
+    ...location,
+  }))
+
+  defaultLocations.forEach((plant) => plantsById.set(Number(plant.id), plant))
+  state.plants.forEach((plant) => {
+    const plantId = plantIdentifier(plant)
+    if (!plantId) {
+      return
+    }
+    plantsById.set(plantId, {
+      ...plantsById.get(plantId),
+      ...plant,
+      id: plantId,
+      name: plant.name || plant.plantName || plantsById.get(plantId)?.plantName,
+    })
+  })
+
+  const scoreByPlantId = new Map([
+    ...state.esgScores.map((score) => [plantIdentifier(score), score]),
+    ...esgPlants.value.map((plant) => [plantIdentifier(plant), plant]),
+  ].filter(([plantId]) => plantId != null))
+
+  const splitIndex = Math.ceil(plantsById.size / 2)
+
+  return Array.from(plantsById.values())
+    .map((plant) => {
+      const plantId = plantIdentifier(plant)
+      const location = DEFAULT_PLANT_LOCATIONS[plantId] || plant
+      const score = scoreByPlantId.get(plantId) || {}
+      const longitude = Number(plant.longitude ?? plant.lng ?? location.longitude)
+      const latitude = Number(plant.latitude ?? plant.lat ?? location.latitude)
+      return {
+        ...plant,
+        plantId,
+        plantName: plant.plantName || plant.name || location.plantName || `사업장 ${plantId}`,
+        latitude,
+        longitude,
+        grade: score.grade || plant.grade || (plantId <= 3 ? 'AA' : 'BBB'),
+        totalScore: score.totalScore ?? score.total_score ?? plant.totalScore ?? (plantId <= 3 ? 8.02 : 5.48),
+      }
+    })
+    .filter((plant) => plant.plantId && Number.isFinite(plant.latitude) && Number.isFinite(plant.longitude))
+    .sort((left, right) => left.plantId - right.plantId)
+    .map((plant, index) => {
+      const layout = DASHBOARD_PLANT_LAYOUT[plant.plantId]
+      const side = layout?.side || (index < splitIndex ? 'left' : 'right')
+      const slot = layout?.card || {
+        x: side === 'left' ? 4 : 80,
+        y: 18 + (index % 3) * 24,
+      }
+      const pin = projectDashboardPlant(plant.longitude, plant.latitude)
+      return {
+        ...plant,
+        side,
+        pin,
+        card: slot,
+        connectorPath: connectorPath(slot, pin, side),
+      }
+    })
+})
+
 function esgGradeClass(grade) {
   if (['AAA', 'AA', 'A'].includes(grade)) {
     return 'good'
@@ -1571,34 +1656,55 @@ const esgCompareRows = computed(() =>
     scores: [plant.carbonScore, plant.waterScore, plant.solarScore, plant.peakScore].map((score) => Number(score || 0)),
   })),
 )
-function buildScadaExternalUrl(userName) {
-  const url = new URL(SCADA_EXTERNAL_URL)
-  if (userName) {
-    url.searchParams.set('userName', userName)
+function projectDashboardPlant(longitude, latitude) {
+  const minLng = 125.6
+  const maxLng = 129.8
+  const minLat = 34.6
+  const maxLat = 38.1
+  const x = 34 + ((longitude - minLng) / (maxLng - minLng)) * 34
+  const y = 20 + ((maxLat - latitude) / (maxLat - minLat)) * 60
+  return {
+    x: Math.max(34, Math.min(70, x)),
+    y: Math.max(16, Math.min(82, y)),
+  }
+}
+
+function connectorPath(card, pin, side) {
+  const startX = side === 'left' ? card.x + DASHBOARD_CARD_WIDTH : card.x
+  const startY = card.y + DASHBOARD_CARD_HEIGHT / 2
+  const controlX = side === 'left' ? startX + 14 : startX - 14
+  const pinLeadX = side === 'left' ? pin.x - 5 : pin.x + 5
+  return `M ${startX} ${startY} C ${controlX} ${startY}, ${pinLeadX} ${pin.y}, ${pin.x} ${pin.y}`
+}
+
+function buildScadaExternalUrl(plant) {
+  const url = new URL(SCADA_EXTERNAL_URL, window.location.origin)
+  const plantId = plantIdentifier(plant)
+  if (plantId) {
+    url.searchParams.set('plantId', plantId)
+  }
+  if (plant?.plantName || plant?.name) {
+    url.searchParams.set('plantName', plant.plantName || plant.name)
+  }
+  if (state.me?.name) {
+    url.searchParams.set('userName', state.me.name)
   }
   return url.toString()
 }
 
-async function redirectToScada() {
-  let userName = state.me?.name
+function openPlantSolution(plant) {
+  solutionViewer.plant = plant
+  solutionViewer.url = buildScadaExternalUrl(plant)
+  solutionViewer.open = true
+}
 
-  if (!userName && getAccessToken()) {
-    try {
-      const me = await api.me()
-      state.me = me
-      userName = me.name
-    } catch {
-      userName = ''
-    }
-  }
-
-  window.location.href = buildScadaExternalUrl(userName)
+function closePlantSolution() {
+  solutionViewer.open = false
 }
 
 function routeTo(hash) {
   if (hash === '/scada') {
-    redirectToScada()
-    return
+    hash = '/detail/dashboard'
   }
   if (window.location.hash === `#${hash}`) {
     applyRoute()
@@ -1608,7 +1714,7 @@ function routeTo(hash) {
 }
 
 function applyRoute() {
-  const route = window.location.hash.replace(/^#/, '') || (getAccessToken() ? '/scada' : '/login')
+  const route = window.location.hash.replace(/^#/, '') || (getAccessToken() ? '/detail/dashboard' : '/login')
 
   if (route === '/login') {
     appMode.value = 'login'
@@ -1621,7 +1727,7 @@ function applyRoute() {
   }
 
   if (route === '/scada') {
-    redirectToScada()
+    routeTo('/detail/dashboard')
     return
   }
 
@@ -1632,7 +1738,7 @@ function applyRoute() {
     return
   }
 
-  routeTo(getAccessToken() ? '/scada' : '/login')
+  routeTo(getAccessToken() ? '/detail/dashboard' : '/login')
 }
 
 function formatNumber(value, digits = 1) {
@@ -1888,7 +1994,7 @@ async function login() {
     const response = await api.login(loginForm)
     saveTokens(response)
     state.me = response
-    routeTo('/scada')
+    routeTo('/detail/dashboard')
     await loadInitial()
   })
 }
@@ -1968,6 +2074,11 @@ async function loadActivePageData() {
     return
   }
 
+  if (activePage.value === 'dashboard') {
+    await loadDashboardData()
+    return
+  }
+
   if (appMode.value === 'scada') {
     await loadOverviewEnergyData()
     return
@@ -2008,6 +2119,25 @@ async function loadActivePageData() {
   }
 }
 
+async function loadDashboardData() {
+  const [overview, esgScores] = await Promise.all([
+    selectedPlantId.value ? api.dashboard(selectedPlantId.value).catch(() => null) : Promise.resolve(null),
+    api.esgScores({
+      from: selectedEsgFrom.value,
+      to: selectedEsgTo.value,
+    }).catch(() => []),
+  ])
+
+  state.overview = overview
+  state.esgScores = esgScores
+}
+
+async function loadAlarms() {
+  state.alarms = await api.alarms({
+    plantId: selectedPlantId.value || undefined,
+    status: 'OCCURRED',
+    limit: 100,
+  })
 async function loadAlarms(options = {}) {
   const { silent = false } = options || {}
   const requestId = ++alarmsRequestId
@@ -3026,7 +3156,10 @@ onUnmounted(() => {
           <span class="avatar">{{ state.me?.name?.slice(0, 1) || 'U' }}</span>
           <span><b>{{ state.me?.name || '사용자' }}</b>{{ state.me?.role || '-' }}</span>
         </button>
-        <button class="collapse-button" type="button" @click="goScada">대시보드</button>
+        <button class="side-logout-button" type="button" @click="logout">
+          <LogOut :size="18" />
+          <span>로그아웃</span>
+        </button>
       </div>
     </aside>
 
@@ -3042,7 +3175,79 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <section v-if="activePage !== 'esg'" class="filter-card">
+      <section v-if="activePage === 'dashboard'" class="page-stack dashboard-page">
+        <article class="dashboard-map-panel">
+          <div class="dashboard-map-head">
+            <div>
+              <span>SMWP Network</span>
+              <h2>사업장 환경종합 현황도</h2>
+            </div>
+            <b>{{ dashboardPlants.length }}개 사업장</b>
+          </div>
+
+          <div class="plant-map-stage">
+            <svg class="plant-map-svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <defs>
+                <linearGradient id="dashboardLand" x1="0" x2="1" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#8ed7ff" />
+                  <stop offset="100%" stop-color="#2786d8" />
+                </linearGradient>
+                <filter id="dashboardGlow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="2.4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <path
+                class="dashboard-korea-shadow"
+                d="M53 11 L58 14 L62 19 L65 26 L65 33 L62 40 L60 45 L66 48 L70 54 L71 61 L68 68 L64 73 L58 76 L54 76 L50 82 L43 85 L37 82 L34 78 L29 78 L24 75 L22 70 L25 64 L22 58 L24 52 L30 48 L29 43 L31 38 L36 35 L39 31 L45 28 L51 29 L49 24 L49 17 Z"
+              />
+              <path
+                class="dashboard-korea-land"
+                d="M52 8 L57 12 L61 17 L64 24 L64 31 L61 38 L58 44 L64 47 L68 52 L69 59 L66 66 L62 70 L56 73 L52 73 L48 80 L42 83 L37 80 L34 75 L29 75 L25 72 L24 68 L27 63 L24 58 L25 53 L31 49 L30 44 L33 39 L38 36 L41 32 L46 30 L52 31 L50 24 L50 16 Z"
+              />
+              <ellipse class="dashboard-korea-island" cx="43" cy="91" rx="5.6" ry="2.2" />
+              <circle class="dashboard-korea-island small" cx="77" cy="52" r="1.1" />
+              <path
+                v-for="plant in dashboardPlants"
+                :key="`line-${plant.plantId}`"
+                class="plant-connector"
+                :d="plant.connectorPath"
+              />
+
+              <g
+                v-for="plant in dashboardPlants"
+                :key="`pin-${plant.plantId}`"
+                class="plant-pin-svg"
+                :transform="`translate(${plant.pin.x} ${plant.pin.y})`"
+                @click="openPlantSolution(plant)"
+              >
+                <circle class="plant-pin-halo" r="2.2"></circle>
+                <circle class="plant-pin-core" r="0.9"></circle>
+              </g>
+
+              <g
+                v-for="plant in dashboardPlants"
+                :key="plant.plantId"
+                class="plant-card-svg"
+                :transform="`translate(${plant.card.x} ${plant.card.y})`"
+                @click="openPlantSolution(plant)"
+              >
+                <rect :width="DASHBOARD_CARD_WIDTH" :height="DASHBOARD_CARD_HEIGHT" rx="0.8"></rect>
+                <text class="plant-card-name" x="0.9" y="2.6">{{ plant.plantName }}</text>
+                <text :class="['plant-card-grade', esgGradeClass(plant.grade)]" x="0.9" y="6.4">{{ plant.grade }}</text>
+                <text class="plant-card-score" :x="DASHBOARD_CARD_WIDTH - 1" y="6.4" text-anchor="end">
+                  {{ formatNumber(plant.totalScore) }}
+                </text>
+              </g>
+            </svg>
+          </div>
+        </article>
+      </section>
+
+      <section v-if="activePage !== 'esg' && activePage !== 'dashboard'" class="filter-card">
         <label>
           사업장
           <select v-model.number="selectedPlantId">
@@ -4372,6 +4577,8 @@ onUnmounted(() => {
         </aside>
       </section>
 
+      <section v-else-if="activePage === 'alarms'" class="page-stack alarm-page">
+        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
       <section v-else class="page-stack alarm-page">
         <article v-if="alarmsLoading" class="panel table-panel alarm-tab-panel alarm-skeleton-panel" role="status" aria-live="polite">
           <span class="sr-only">알람 목록을 불러오는 중입니다.</span>
@@ -4468,6 +4675,23 @@ onUnmounted(() => {
           </section>
         </article>
       </section>
+
+      <div v-if="solutionViewer.open" class="solution-overlay">
+        <section class="solution-frame">
+          <header>
+            <div>
+              <span>SMWP Solution</span>
+              <h2>{{ solutionViewer.plant?.plantName || solutionViewer.plant?.name || '사업장 솔루션' }}</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="솔루션 화면 닫기" @click="closePlantSolution">×</button>
+          </header>
+          <iframe
+            :src="solutionViewer.url"
+            title="SMWP solution"
+            referrerpolicy="no-referrer-when-downgrade"
+          ></iframe>
+        </section>
+      </div>
     </section>
   </main>
 </template>
