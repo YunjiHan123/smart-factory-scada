@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { importLibrary, setOptions } from '@googlemaps/js-api-loader'
 import {
   Activity,
   AlertTriangle,
@@ -27,7 +28,7 @@ import { api, clearTokens, getAccessToken, saveTokens } from './api'
 
 const appMode = ref(getAccessToken() ? 'detail' : 'login')
 const SCADA_EXTERNAL_URL = import.meta.env.VITE_SMWP_SCADA_URL || 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
-const KAKAO_MAP_APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 const activePage = ref('dashboard')
 const loading = ref(false)
 const errorMessage = ref('')
@@ -58,10 +59,15 @@ const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
 const esgDashboardLoading = ref(false)
+const dashboardMapElement = ref(null)
+const dashboardMapState = reactive({
+  status: GOOGLE_MAPS_API_KEY ? 'idle' : 'missing-key',
+  message: GOOGLE_MAPS_API_KEY ? 'Loading map.' : 'Google Maps API key is missing.',
+})
 const esgMapElement = ref(null)
 const esgMapState = reactive({
-  status: KAKAO_MAP_APP_KEY ? 'idle' : 'missing-key',
-  message: KAKAO_MAP_APP_KEY ? '' : 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.',
+  status: GOOGLE_MAPS_API_KEY ? 'idle' : 'missing-key',
+  message: GOOGLE_MAPS_API_KEY ? 'Loading map.' : 'Google Maps API key is missing.',
 })
 const alarmSortOrder = ref('desc')
 const alarmsLoading = ref(false)
@@ -69,17 +75,14 @@ const syncingSelection = ref(false)
 const realtimeNow = ref(Date.now())
 let energySocket = null
 let energySocketReconnectTimer = null
-let energyPollTimer = null
 let realtimeTickTimer = null
-let latestEnergyPollInFlight = false
-let latestEnergyPollRetryAt = 0
-let latestEnergyPollFailureCount = 0
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
-let esgMapScriptPromise = null
-let esgKakaoMap = null
-let esgKakaoMarkers = []
-let esgKakaoOverlays = []
+let googleMapsConfigured = false
+let dashboardGoogleMap = null
+let dashboardGoogleOverlays = []
+let esgGoogleMap = null
+let esgGoogleOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
 let lastAlarmRefreshAt = 0
@@ -90,7 +93,6 @@ let usersRequestId = 0
 let alarmsRequestId = 0
 const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
-const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
 const PLANT_PEAK_THRESHOLD_KW = 8500
 const DEFAULT_PLANT_LOCATIONS = {
@@ -111,6 +113,29 @@ const DASHBOARD_PLANT_LAYOUT = {
 }
 const DASHBOARD_CARD_WIDTH = 14
 const DASHBOARD_CARD_HEIGHT = 8.8
+const GOOGLE_MAP_STYLES = [
+  { featureType: 'administrative', elementType: 'labels.text.fill', stylers: [{ color: '#4b647f' }] },
+  { featureType: 'administrative.province', elementType: 'geometry.stroke', stylers: [{ color: '#b7c8dd' }] },
+  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#eef5f2' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#edf2f7' }] },
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#d6e1ec' }] },
+  { featureType: 'road', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#cfeff3' }] },
+]
+const GOOGLE_MAP_OPTIONS = {
+  styles: GOOGLE_MAP_STYLES,
+  disableDefaultUI: true,
+  zoomControl: true,
+  mapTypeControl: false,
+  streetViewControl: false,
+  fullscreenControl: true,
+  clickableIcons: false,
+  gestureHandling: 'greedy',
+}
+const MAP_CARD_LANE_OFFSETS = [-44, -22, 0, 22, 44]
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
@@ -552,17 +577,6 @@ function energyMetricKeys(energyType) {
   return values[energyType] || values.ELECTRICITY
 }
 
-function markLatestEnergyPollSuccess() {
-  latestEnergyPollFailureCount = 0
-  latestEnergyPollRetryAt = 0
-}
-
-function markLatestEnergyPollFailure() {
-  latestEnergyPollFailureCount += 1
-  const retryDelay = Math.min(15000, 2000 * latestEnergyPollFailureCount)
-  latestEnergyPollRetryAt = Date.now() + retryDelay
-}
-
 function allLineFacilityIds(plantId = selectedPlantId.value) {
   const numericPlantId = Number(plantId)
   if (!Number.isFinite(numericPlantId) || numericPlantId <= 0) {
@@ -856,54 +870,40 @@ function plantIdentifier(plant) {
   return Number.isFinite(number) ? number : null
 }
 
-function loadKakaoMapsScript() {
-  if (!KAKAO_MAP_APP_KEY) {
-    return Promise.reject(new Error('Kakao Maps API key is missing.'))
+async function loadGoogleMapsLibrary() {
+  if (!GOOGLE_MAPS_API_KEY) {
+    throw new Error('Google Maps API key is missing.')
   }
 
-  if (window.kakao?.maps) {
-    return new Promise((resolve) => window.kakao.maps.load(resolve))
-  }
-
-  if (!esgMapScriptPromise) {
-    esgMapScriptPromise = new Promise((resolve, reject) => {
-      const existingScript = document.getElementById('kakao-maps-sdk')
-      if (existingScript) {
-        existingScript.addEventListener('load', () => {
-          if (window.kakao?.maps) {
-            window.kakao.maps.load(resolve)
-          } else {
-            reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
-          }
-        }, { once: true })
-        existingScript.addEventListener('error', reject, { once: true })
-        return
-      }
-
-      const script = document.createElement('script')
-      script.id = 'kakao-maps-sdk'
-      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_MAP_APP_KEY}&autoload=false`
-      script.async = true
-      script.onload = () => {
-        if (window.kakao?.maps) {
-          window.kakao.maps.load(resolve)
-        } else {
-          reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
-        }
-      }
-      script.onerror = () => reject(new Error('Kakao Maps SDK could not be loaded.'))
-      document.head.appendChild(script)
+  if (!googleMapsConfigured) {
+    setOptions({
+      key: GOOGLE_MAPS_API_KEY,
+      v: 'weekly',
+      language: 'ko',
+      region: 'KR',
     })
+    googleMapsConfigured = true
   }
 
-  return esgMapScriptPromise
+  const [mapsLibrary, coreLibrary] = await Promise.all([
+    importLibrary('maps'),
+    importLibrary('core'),
+  ])
+
+  return {
+    ...mapsLibrary,
+    ...coreLibrary,
+  }
+}
+
+function clearDashboardMapMarkers() {
+  dashboardGoogleOverlays.forEach((overlay) => overlay.setMap(null))
+  dashboardGoogleOverlays = []
 }
 
 function clearEsgMapMarkers() {
-  esgKakaoMarkers.forEach(({ marker }) => marker.setMap(null))
-  esgKakaoOverlays.forEach((overlay) => overlay.setMap(null))
-  esgKakaoMarkers = []
-  esgKakaoOverlays = []
+  esgGoogleOverlays.forEach((overlay) => overlay.setMap(null))
+  esgGoogleOverlays = []
 }
 
 function escapeHtml(value) {
@@ -915,17 +915,212 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;')
 }
 
-function esgMapOverlayContent(plant) {
-  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+function mapCardLaneOffset(index) {
+  return MAP_CARD_LANE_OFFSETS[index % MAP_CARD_LANE_OFFSETS.length]
+}
+
+function mapOverlaySide(plant, fallbackCenterLng = 127.9) {
+  if (plant?.side === 'left' || plant?.side === 'right') {
+    return plant.side
+  }
+  return Number(plant?.longitude) < fallbackCenterLng ? 'left' : 'right'
+}
+
+function createGoogleMapOverlay(maps, map, position, content, options = {}) {
+  const { zIndex = 1, laneOffset = 0, side = null } = options
+  const resolvedSide = side || 'right'
+  const connectorX = resolvedSide === 'left' ? -46 : 46
+  const connectorAngle = Math.atan2(laneOffset, connectorX) * 180 / Math.PI
+  const connectorWidth = Math.hypot(connectorX, laneOffset)
+
+  class PlantOverlay extends maps.OverlayView {
+    constructor() {
+      super()
+      this.position = new maps.LatLng(position.lat, position.lng)
+      this.element = content
+    }
+
+    onAdd() {
+      const panes = this.getPanes()
+      this.element.style.position = 'absolute'
+      this.element.style.zIndex = String(zIndex)
+      this.element.style.setProperty('--card-y', `${laneOffset}px`)
+      this.element.style.setProperty('--connector-angle', `${connectorAngle}deg`)
+      this.element.style.setProperty('--connector-width', `${connectorWidth}px`)
+      panes.overlayMouseTarget.appendChild(this.element)
+    }
+
+    draw() {
+      const point = this.getProjection()?.fromLatLngToDivPixel(this.position)
+      if (!point) {
+        return
+      }
+      this.element.classList.toggle('left', resolvedSide === 'left')
+      this.element.classList.toggle('right', resolvedSide !== 'left')
+      this.element.style.left = `${point.x}px`
+      this.element.style.top = `${point.y}px`
+      this.element.style.transform = 'translate(-50%, -50%)'
+    }
+
+    onRemove() {
+      this.element.remove()
+    }
+  }
+
+  const overlay = new PlantOverlay()
+  overlay.setMap(map)
+  return overlay
+}
+
+function htmlToElement(html) {
+  const wrapper = document.createElement('div')
+  wrapper.innerHTML = html.trim()
+  return wrapper.firstElementChild
+}
+
+function mapCenterLongitude(plants, fallback = 127.9) {
+  const longitudes = plants
+    .map((plant) => Number(plant.longitude))
+    .filter(Number.isFinite)
+  if (!longitudes.length) {
+    return fallback
+  }
+  return (Math.min(...longitudes) + Math.max(...longitudes)) / 2
+}
+
+function fitGoogleMapToPlants(map, maps, plants, fallbackZoom = 7) {
+  if (!plants.length) {
+    return
+  }
+
+  if (plants.length === 1) {
+    map.setCenter({
+      lat: Number(plants[0].latitude),
+      lng: Number(plants[0].longitude),
+    })
+    map.setZoom(fallbackZoom)
+    return
+  }
+
+  const bounds = new maps.LatLngBounds()
+  plants.forEach((plant) => {
+    bounds.extend({
+      lat: Number(plant.latitude),
+      lng: Number(plant.longitude),
+    })
+  })
+  map.fitBounds(bounds, {
+    top: 56,
+    right: 56,
+    bottom: 56,
+    left: 56,
+  })
+}
+
+function dashboardMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedPlantId.value)
+  const gradeClass = esgGradeClass(plant.grade)
   return `
-    <div class="esg-map-label${active ? ' active' : ''}">
-      <strong class="${esgGradeClass(plant.grade)}">${escapeHtml(plant.grade || '-')}</strong>
-      <span>${escapeHtml(plant.plantName || '-')}</span>
-    </div>
+    <button type="button" class="google-plant-marker dashboard ${active ? 'active' : ''}">
+      <span class="google-plant-pin ${gradeClass}"></span>
+      <span class="google-plant-card">
+        <b>${escapeHtml(plant.plantName || '-')}</b>
+        <strong class="${gradeClass}">${escapeHtml(plant.grade || '-')}</strong>
+        <em>${escapeHtml(formatNumber(plant.totalScore))} pt</em>
+      </span>
+    </button>
   `
 }
 
-async function renderEsgKakaoMap() {
+function esgMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+  const gradeClass = esgGradeClass(plant.grade)
+  return `
+    <button type="button" class="google-plant-marker esg ${active ? 'active' : ''}">
+      <span class="google-plant-pin ${gradeClass}"></span>
+      <span class="google-plant-card esg-map-label">
+        <strong class="${gradeClass}">${escapeHtml(plant.grade || '-')}</strong>
+        <span>${escapeHtml(plant.plantName || '-')}</span>
+      </span>
+    </button>
+  `
+}
+
+async function renderDashboardGoogleMap() {
+  if (activePage.value !== 'dashboard') {
+    return
+  }
+
+  await nextTick()
+  const plants = dashboardPlants.value
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    dashboardMapState.status = 'missing-key'
+    dashboardMapState.message = 'Google Maps API key is missing.'
+    return
+  }
+
+  const container = dashboardMapElement.value
+  if (!container) {
+    return
+  }
+
+  if (!plants.length) {
+    dashboardMapState.status = 'empty'
+    dashboardMapState.message = 'No plant coordinates were found.'
+    clearDashboardMapMarkers()
+    return
+  }
+
+  dashboardMapState.status = 'loading'
+  dashboardMapState.message = 'Loading map.'
+
+  try {
+    const maps = await loadGoogleMapsLibrary()
+    if (!dashboardGoogleMap) {
+      dashboardGoogleMap = new maps.Map(container, {
+        ...GOOGLE_MAP_OPTIONS,
+        center: { lat: 36.4, lng: 127.9 },
+        zoom: plants.length > 1 ? 7 : 10,
+      })
+    } else {
+      dashboardGoogleMap.setOptions({
+        ...GOOGLE_MAP_OPTIONS,
+        restriction: null,
+      })
+      dashboardGoogleMap.setCenter({ lat: 36.4, lng: 127.9 })
+    }
+
+    clearDashboardMapMarkers()
+    plants.forEach((plant, index) => {
+      const markerElement = htmlToElement(dashboardMapOverlayContent(plant))
+      markerElement.addEventListener('click', () => openPlantSolution(plant))
+      const overlay = createGoogleMapOverlay(
+        maps,
+        dashboardGoogleMap,
+        { lat: Number(plant.latitude), lng: Number(plant.longitude) },
+        markerElement,
+        {
+          zIndex: Number(plant.plantId) === Number(selectedPlantId.value) ? 4 : 2,
+          laneOffset: mapCardLaneOffset(index),
+          side: mapOverlaySide(plant),
+        },
+      )
+      dashboardGoogleOverlays.push(overlay)
+    })
+
+    fitGoogleMapToPlants(dashboardGoogleMap, maps, plants, plants.length > 1 ? 7 : 10)
+    dashboardMapState.status = 'ready'
+    dashboardMapState.message = ''
+  } catch (error) {
+    console.error(error)
+    clearDashboardMapMarkers()
+    dashboardMapState.status = 'error'
+    dashboardMapState.message = 'Google Maps could not be loaded.'
+  }
+}
+
+async function renderEsgGoogleMap() {
   if (activePage.value !== 'esg') {
     return
   }
@@ -933,9 +1128,9 @@ async function renderEsgKakaoMap() {
   await nextTick()
   const plants = esgMapPlants.value
 
-  if (!KAKAO_MAP_APP_KEY) {
+  if (!GOOGLE_MAPS_API_KEY) {
     esgMapState.status = 'missing-key'
-    esgMapState.message = 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.'
+    esgMapState.message = 'Google Maps API key is missing.'
     return
   }
 
@@ -946,70 +1141,58 @@ async function renderEsgKakaoMap() {
 
   if (!plants.length) {
     esgMapState.status = 'empty'
-    esgMapState.message = '좌표가 있는 사업장 데이터가 없습니다.'
+    esgMapState.message = 'No plant coordinates were found.'
     clearEsgMapMarkers()
     return
   }
 
   esgMapState.status = 'loading'
-  esgMapState.message = '지도를 불러오는 중입니다.'
+  esgMapState.message = 'Loading map.'
 
   try {
-    await loadKakaoMapsScript()
-    const maps = window.kakao.maps
-    const center = new maps.LatLng(36.4, 127.9)
+    const maps = await loadGoogleMapsLibrary()
+    const center = { lat: 36.4, lng: 127.9 }
 
-    if (!esgKakaoMap) {
-      esgKakaoMap = new maps.Map(container, {
+    if (!esgGoogleMap) {
+      esgGoogleMap = new maps.Map(container, {
+        ...GOOGLE_MAP_OPTIONS,
         center,
-        level: plants.length > 1 ? 12 : 8,
+        zoom: plants.length > 1 ? 7 : 10,
       })
     } else {
-      esgKakaoMap.setCenter(center)
+      esgGoogleMap.setOptions(GOOGLE_MAP_OPTIONS)
+      esgGoogleMap.setCenter(center)
     }
 
     clearEsgMapMarkers()
-    const bounds = new maps.LatLngBounds()
-
-    plants.forEach((plant) => {
-      const position = new maps.LatLng(Number(plant.latitude), Number(plant.longitude))
-      bounds.extend(position)
-      const marker = new maps.Marker({
-        map: esgKakaoMap,
-        position,
-        title: plant.plantName,
-      })
-
-      maps.event.addListener(marker, 'click', () => {
+    const centerLongitude = mapCenterLongitude(plants)
+    plants.forEach((plant, index) => {
+      const markerElement = htmlToElement(esgMapOverlayContent(plant))
+      markerElement.addEventListener('click', () => {
         selectedPlantId.value = plant.plantId
       })
-
-      const overlay = new maps.CustomOverlay({
-        content: esgMapOverlayContent(plant),
-        position,
-        xAnchor: 0.5,
-        yAnchor: 2.45,
-        zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
-      })
-      overlay.setMap(esgKakaoMap)
-
-      esgKakaoMarkers.push({ marker, plant })
-      esgKakaoOverlays.push(overlay)
+      const overlay = createGoogleMapOverlay(
+        maps,
+        esgGoogleMap,
+        { lat: Number(plant.latitude), lng: Number(plant.longitude) },
+        markerElement,
+        {
+          zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
+          laneOffset: mapCardLaneOffset(index),
+          side: mapOverlaySide(plant, centerLongitude),
+        },
+      )
+      esgGoogleOverlays.push(overlay)
     })
 
-    if (plants.length > 1) {
-      esgKakaoMap.setBounds(bounds, 28, 28, 28, 28)
-    } else {
-      esgKakaoMap.setLevel(8)
-    }
-
+    fitGoogleMapToPlants(esgGoogleMap, maps, plants, plants.length > 1 ? 7 : 10)
     esgMapState.status = 'ready'
     esgMapState.message = ''
   } catch (error) {
     console.error(error)
     clearEsgMapMarkers()
     esgMapState.status = 'error'
-    esgMapState.message = '지도를 불러오지 못했습니다. API 키와 도메인 설정을 확인해 주세요.'
+    esgMapState.message = 'Google Maps could not be loaded.'
   }
 }
 
@@ -2030,11 +2213,10 @@ async function run(task) {
       error.status === 403 ||
       error.message.includes('인증') ||
       error.message.includes('Unauthorized')
-    ) {
-      stopEnergyWebSocket()
-      stopEnergyPolling()
-      clearTokens()
-      routeTo('/login')
+      ) {
+        stopEnergyWebSocket()
+        clearTokens()
+        routeTo('/login')
     }
   } finally {
     loading.value = false
@@ -2057,7 +2239,6 @@ async function logout() {
       await api.logout()
     } finally {
       stopEnergyWebSocket()
-      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -2463,7 +2644,6 @@ async function loadEnergyData() {
   }
   await loadFacilityDetail()
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function preloadPlantLiveEnergy(dateValue = formatDateInput(new Date()), toValue = formatDateTimeInput(new Date())) {
@@ -2534,7 +2714,6 @@ async function loadOverviewEnergyData() {
   state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function loadFacilityDetail() {
@@ -2592,7 +2771,6 @@ async function loadPeakDashboard(options = {}) {
       await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
     }
     startEnergyWebSocket()
-    startEnergyPolling()
   } finally {
     if (!silent && requestId === peakDashboardRequestId) {
       peakDashboardLoading.value = false
@@ -2630,7 +2808,6 @@ async function loadUtilityDashboard(options = {}) {
       await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
     }
     startEnergyWebSocket()
-    startEnergyPolling()
   } finally {
     if (!silent && requestId === utilityDashboardRequestId) {
       utilityDashboardLoading.value = false
@@ -2658,78 +2835,11 @@ async function loadEsgDashboard(options = {}) {
       return
     }
     state.esgDashboard = dashboard
-    await renderEsgKakaoMap()
+    await renderEsgGoogleMap()
   } finally {
     if (!silent && requestId === esgDashboardRequestId) {
       esgDashboardLoading.value = false
     }
-  }
-}
-
-async function loadLatestEnergy() {
-  if (!selectedPlantId.value || appMode.value === 'login') {
-    state.latestEnergy = null
-    return
-  }
-  if (Date.now() < latestEnergyPollRetryAt) {
-    return
-  }
-
-  if (activePage.value === 'facility' && selectedFacilityDateIsToday.value) {
-    const visibleFacilityIds = new Set(allLineFacilityIds(selectedPlantId.value))
-    let rows = []
-    try {
-      rows = await api.energyMeasurements({
-        plantId: selectedPlantId.value,
-        from: `${formatDateInput(new Date())}T00:00:00`,
-        to: formatDateTimeInput(new Date()),
-        limit: 5000,
-      })
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    rememberLatestRowsByFacility(rows, visibleFacilityIds)
-    state.latestEnergy = selectedLiveEnergy.value || Array.from(liveEnergyByFacility.values()).find((message) =>
-      visibleFacilityIds.has(Number(message.facilityId))
-    ) || null
-    return
-  }
-
-  if (selectedFacilityId.value) {
-    let latestEnergy = null
-    try {
-      latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value)
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
-    return
-  }
-
-  let rows = []
-  try {
-    rows = await api.energyMeasurements({
-      plantId: selectedPlantId.value,
-      from: `${formatDateInput(new Date())}T00:00:00`,
-      to: formatDateTimeInput(new Date()),
-      limit: 5000,
-    })
-    markLatestEnergyPollSuccess()
-  } catch {
-    markLatestEnergyPollFailure()
-    return
-  }
-  rememberLatestRowsByFacility(rows, new Set(allLineFacilityIds(selectedPlantId.value)))
-  state.latestEnergy = selectedLiveEnergy.value || null
-  if (activePage.value === 'peak') {
-    schedulePeakRefresh()
-  }
-  if (activePage.value === 'utility') {
-    scheduleUtilityRefresh()
   }
 }
 
@@ -2814,33 +2924,6 @@ function stopEnergyWebSocket() {
     socket.onclose = null
     socket.close()
   }
-}
-
-function startEnergyPolling() {
-  if (energyPollTimer || appMode.value === 'login') {
-    return
-  }
-
-  energyPollTimer = window.setInterval(async () => {
-    if (latestEnergyPollInFlight || appMode.value === 'login') {
-      return
-    }
-
-    latestEnergyPollInFlight = true
-    try {
-      await loadLatestEnergy()
-    } finally {
-      latestEnergyPollInFlight = false
-    }
-  }, LIVE_POLL_MS)
-}
-
-function stopEnergyPolling() {
-  window.clearInterval(energyPollTimer)
-  energyPollTimer = null
-  latestEnergyPollInFlight = false
-  latestEnergyPollRetryAt = 0
-  latestEnergyPollFailureCount = 0
 }
 
 async function refreshData() {
@@ -3020,7 +3103,13 @@ watch(selectedEsgMonth, () => {
 
 watch([selectedEsgPlant, esgMapPlants, activePage], () => {
   if (appMode.value !== 'login' && activePage.value === 'esg') {
-    renderEsgKakaoMap()
+    renderEsgGoogleMap()
+  }
+}, { flush: 'post' })
+
+watch([dashboardPlants, selectedPlantId, activePage], () => {
+  if (appMode.value !== 'login' && activePage.value === 'dashboard') {
+    renderDashboardGoogleMap()
   }
 }, { flush: 'post' })
 
@@ -3038,7 +3127,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
-  stopEnergyPolling()
+  clearDashboardMapMarkers()
   clearEsgMapMarkers()
   window.clearInterval(realtimeTickTimer)
   window.clearTimeout(peakRefreshTimer)
@@ -3243,63 +3332,16 @@ onUnmounted(() => {
           </div>
 
           <div class="plant-map-stage">
-            <svg class="plant-map-svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-              <defs>
-                <linearGradient id="dashboardLand" x1="0" x2="1" y1="0" y2="1">
-                  <stop offset="0%" stop-color="#8ed7ff" />
-                  <stop offset="100%" stop-color="#2786d8" />
-                </linearGradient>
-                <filter id="dashboardGlow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="2.4" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-              <path
-                class="dashboard-korea-shadow"
-                d="M53 11 L58 14 L62 19 L65 26 L65 33 L62 40 L60 45 L66 48 L70 54 L71 61 L68 68 L64 73 L58 76 L54 76 L50 82 L43 85 L37 82 L34 78 L29 78 L24 75 L22 70 L25 64 L22 58 L24 52 L30 48 L29 43 L31 38 L36 35 L39 31 L45 28 L51 29 L49 24 L49 17 Z"
-              />
-              <path
-                class="dashboard-korea-land"
-                d="M52 8 L57 12 L61 17 L64 24 L64 31 L61 38 L58 44 L64 47 L68 52 L69 59 L66 66 L62 70 L56 73 L52 73 L48 80 L42 83 L37 80 L34 75 L29 75 L25 72 L24 68 L27 63 L24 58 L25 53 L31 49 L30 44 L33 39 L38 36 L41 32 L46 30 L52 31 L50 24 L50 16 Z"
-              />
-              <ellipse class="dashboard-korea-island" cx="43" cy="91" rx="5.6" ry="2.2" />
-              <circle class="dashboard-korea-island small" cx="77" cy="52" r="1.1" />
-              <path
-                v-for="plant in dashboardPlants"
-                :key="`line-${plant.plantId}`"
-                class="plant-connector"
-                :d="plant.connectorPath"
-              />
-
-              <g
-                v-for="plant in dashboardPlants"
-                :key="`pin-${plant.plantId}`"
-                class="plant-pin-svg"
-                :transform="`translate(${plant.pin.x} ${plant.pin.y})`"
-                @click="openPlantSolution(plant)"
-              >
-                <circle class="plant-pin-halo" r="2.2"></circle>
-                <circle class="plant-pin-core" r="0.9"></circle>
-              </g>
-
-              <g
-                v-for="plant in dashboardPlants"
-                :key="plant.plantId"
-                class="plant-card-svg"
-                :transform="`translate(${plant.card.x} ${plant.card.y})`"
-                @click="openPlantSolution(plant)"
-              >
-                <rect :width="DASHBOARD_CARD_WIDTH" :height="DASHBOARD_CARD_HEIGHT" rx="0.8"></rect>
-                <text class="plant-card-name" x="0.9" y="2.6">{{ plant.plantName }}</text>
-                <text :class="['plant-card-grade', esgGradeClass(plant.grade)]" x="0.9" y="6.4">{{ plant.grade }}</text>
-                <text class="plant-card-score" :x="DASHBOARD_CARD_WIDTH - 1" y="6.4" text-anchor="end">
-                  {{ formatNumber(plant.totalScore) }}
-                </text>
-              </g>
-            </svg>
+            <div
+              ref="dashboardMapElement"
+              class="google-dashboard-map"
+              aria-label="Plant dashboard map"
+            ></div>
+            <div v-if="dashboardMapState.status !== 'ready'" class="map-loading-state">
+              <Factory :size="22" />
+              <strong>{{ dashboardMapState.message }}</strong>
+              <span v-if="dashboardMapState.status === 'missing-key'">Set VITE_GOOGLE_MAPS_API_KEY in frontend/.env.</span>
+            </div>
           </div>
         </article>
       </section>
@@ -4459,7 +4501,7 @@ onUnmounted(() => {
               <div v-if="!['ready', 'fallback'].includes(esgMapState.status)" class="esg-map-state">
                 <Factory :size="22" />
                 <strong>{{ esgMapState.message }}</strong>
-                <span v-if="esgMapState.status === 'missing-key'">frontend/.env에 VITE_KAKAO_MAP_APP_KEY를 추가해 주세요.</span>
+                <span v-if="esgMapState.status === 'missing-key'">Set VITE_GOOGLE_MAPS_API_KEY in frontend/.env.</span>
               </div>
             </div>
           </article>
