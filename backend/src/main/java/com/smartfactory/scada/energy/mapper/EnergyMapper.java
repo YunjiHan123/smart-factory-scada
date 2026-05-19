@@ -14,10 +14,12 @@ import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
+import com.smartfactory.scada.energy.dto.PeakPowerPlantComparison;
 import com.smartfactory.scada.energy.dto.PeakPowerTrendPoint;
 import com.smartfactory.scada.energy.dto.UtilityHourlyUsage;
 import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
 import com.smartfactory.scada.energy.dto.UtilityUsagePattern;
+import com.smartfactory.scada.energy.dto.UtilityUsagePlantComparison;
 import com.smartfactory.scada.facility.domain.FacilityType;
 
 @Mapper
@@ -95,9 +97,15 @@ public interface EnergyMapper {
 		@Param("facilityType") FacilityType facilityType
 	);
 
+	Optional<LocalDate> findLatestFacilityLineMeasurementDate(
+		@Param("plantId") Long plantId,
+		@Param("facilityType") FacilityType facilityType
+	);
+
 	List<EnergyFacilityLineUsageResponse> findFacilityLineUsages(
 		@Param("plantId") Long plantId,
 		@Param("facilityType") FacilityType facilityType,
+		@Param("energyType") String energyType,
 		@Param("usageDate") LocalDate usageDate,
 		@Param("yesterdayDate") LocalDate yesterdayDate,
 		@Param("monthStart") LocalDate monthStart,
@@ -125,6 +133,12 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	List<PeakPowerTrendPoint> findPeakPowerDailyTrend(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	List<PeakPowerFacilityRanking> findPeakPowerFacilityRanking(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
@@ -140,6 +154,12 @@ public interface EnergyMapper {
 		@Param("limit") int limit
 	);
 
+	List<PeakPowerPlantComparison> findPeakPowerPlantComparison(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to,
+		@Param("facilityThresholdKw") java.math.BigDecimal facilityThresholdKw
+	);
+
 	Optional<EnergyMeasurement> findLatestPlantMeasurement(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
@@ -147,6 +167,12 @@ public interface EnergyMapper {
 	);
 
 	List<UtilityHourlyUsage> findUtilityHourlyUsage(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<UtilityHourlyUsage> findUtilityDailyUsage(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
@@ -172,6 +198,11 @@ public interface EnergyMapper {
 
 	List<UtilityUsagePattern> findUtilityDailyUsagePatterns(
 		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<UtilityUsagePlantComparison> findUtilityPlantComparison(
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
 	);

@@ -54,6 +54,17 @@
         <result property="exceeded" column="exceeded"/>
     </resultMap>
 
+    <resultMap id="PeakPowerPlantComparisonResultMap" type="com.smartfactory.scada.energy.dto.PeakPowerPlantComparison">
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="periodPeakKw" column="period_peak_kw"/>
+        <result property="periodAverageKw" column="period_average_kw"/>
+        <result property="thresholdKw" column="threshold_kw"/>
+        <result property="peakUsageRate" column="peak_usage_rate"/>
+        <result property="exceeded" column="exceeded"/>
+        <result property="rank" column="plant_rank"/>
+    </resultMap>
+
     <resultMap id="UtilityHourlyUsageResultMap" type="com.smartfactory.scada.energy.dto.UtilityHourlyUsage">
         <result property="measuredAt" column="measured_at"/>
         <result property="gasUsageM3" column="gas_usage_m3"/>
@@ -77,6 +88,17 @@
         <result property="waterUsageTon" column="water_usage_ton"/>
         <result property="gasUsageRate" column="gas_usage_rate"/>
         <result property="waterUsageRate" column="water_usage_rate"/>
+    </resultMap>
+
+    <resultMap id="UtilityUsagePlantComparisonResultMap" type="com.smartfactory.scada.energy.dto.UtilityUsagePlantComparison">
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="gasUsageM3" column="gas_usage_m3"/>
+        <result property="waterUsageTon" column="water_usage_ton"/>
+        <result property="gasShareRate" column="gas_share_rate"/>
+        <result property="waterShareRate" column="water_share_rate"/>
+        <result property="gasRank" column="gas_rank"/>
+        <result property="waterRank" column="water_rank"/>
     </resultMap>
 
     <resultMap id="EnergyFacilityLineUsageResultMap" type="com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse">
@@ -583,11 +605,29 @@
         LIMIT 1
     </select>
 
+    <select id="findLatestFacilityLineMeasurementDate" resultType="java.time.LocalDate">
+        SELECT DATE(em.measured_at)
+        FROM energy_measurements em
+        JOIN facilities f ON f.id = em.facility_id
+        WHERE em.plant_id = #{plantId}
+          AND f.plant_id = #{plantId}
+          AND f.facility_type = #{facilityType}
+          AND f.id &gt;= 10000
+          AND MOD(f.id, 10000) BETWEEN 1 AND 24
+        ORDER BY em.measured_at DESC, em.id DESC
+        LIMIT 1
+    </select>
+
     <select id="findFacilityLineUsages" resultMap="EnergyFacilityLineUsageResultMap">
         WITH target_summary AS (
             SELECT
                 facility_id,
-                electricity_kwh,
+                <choose>
+                    <when test="energyType == 'GAS'">gas_m3</when>
+                    <when test="energyType == 'WATER'">water_ton</when>
+                    <when test="energyType == 'SOLAR'">solar_kwh</when>
+                    <otherwise>electricity_kwh</otherwise>
+                </choose> AS usage_amount,
                 summary_at
             FROM energy_summaries
             WHERE plant_id = #{plantId}
@@ -595,26 +635,131 @@
               AND facility_id IS NOT NULL
               AND DATE(summary_at) = #{usageDate}
         ),
+        target_measurement_usage AS (
+            SELECT
+                facility_id,
+                GREATEST(
+                    MAX(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ) - MIN(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ),
+                    0
+                ) AS usage_amount,
+                MAX(measured_at) AS summary_at
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND facility_id IS NOT NULL
+              AND measured_at &gt;= #{usageFrom}
+              AND measured_at &lt; #{usageTo}
+            GROUP BY facility_id
+        ),
         yesterday_summary AS (
             SELECT
                 facility_id,
-                electricity_kwh
+                <choose>
+                    <when test="energyType == 'GAS'">gas_m3</when>
+                    <when test="energyType == 'WATER'">water_ton</when>
+                    <when test="energyType == 'SOLAR'">solar_kwh</when>
+                    <otherwise>electricity_kwh</otherwise>
+                </choose> AS usage_amount
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'DAILY'
               AND facility_id IS NOT NULL
               AND DATE(summary_at) = #{yesterdayDate}
         ),
+        yesterday_measurement_usage AS (
+            SELECT
+                facility_id,
+                GREATEST(
+                    MAX(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ) - MIN(
+                        <choose>
+                            <when test="energyType == 'GAS'">gas_m3</when>
+                            <when test="energyType == 'WATER'">water_ton</when>
+                            <when test="energyType == 'SOLAR'">solar_kwh</when>
+                            <otherwise>electricity_kwh</otherwise>
+                        </choose>
+                    ),
+                    0
+                ) AS usage_amount
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND facility_id IS NOT NULL
+              AND measured_at &gt;= TIMESTAMP(#{yesterdayDate})
+              AND measured_at &lt; TIMESTAMP(#{usageDate})
+            GROUP BY facility_id
+        ),
         monthly_average AS (
             SELECT
                 facility_id,
-                AVG(COALESCE(electricity_kwh, 0)) AS monthly_average_kwh
+                AVG(COALESCE(
+                    <choose>
+                        <when test="energyType == 'GAS'">gas_m3</when>
+                        <when test="energyType == 'WATER'">water_ton</when>
+                        <when test="energyType == 'SOLAR'">solar_kwh</when>
+                        <otherwise>electricity_kwh</otherwise>
+                    </choose>,
+                    0
+                )) AS monthly_average_kwh
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'DAILY'
               AND facility_id IS NOT NULL
               AND summary_at &gt;= #{monthStart}
               AND summary_at &lt; #{nextMonthStart}
+            GROUP BY facility_id
+        ),
+        monthly_measurement_average AS (
+            SELECT
+                facility_id,
+                AVG(usage_amount) AS monthly_average_kwh
+            FROM (
+                SELECT
+                    facility_id,
+                    DATE(measured_at) AS measured_date,
+                    GREATEST(
+                        MAX(
+                            <choose>
+                                <when test="energyType == 'GAS'">gas_m3</when>
+                                <when test="energyType == 'WATER'">water_ton</when>
+                                <when test="energyType == 'SOLAR'">solar_kwh</when>
+                                <otherwise>electricity_kwh</otherwise>
+                            </choose>
+                        ) - MIN(
+                            <choose>
+                                <when test="energyType == 'GAS'">gas_m3</when>
+                                <when test="energyType == 'WATER'">water_ton</when>
+                                <when test="energyType == 'SOLAR'">solar_kwh</when>
+                                <otherwise>electricity_kwh</otherwise>
+                            </choose>
+                        ),
+                        0
+                    ) AS usage_amount
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND facility_id IS NOT NULL
+                  AND measured_at &gt;= #{monthStart}
+                  AND measured_at &lt; #{nextMonthStart}
+                GROUP BY facility_id, DATE(measured_at)
+            ) daily_measurement_usage
             GROUP BY facility_id
         ),
         latest_measurement AS (
@@ -633,28 +778,31 @@
             f.facility_type,
             f.status AS facility_status,
             CAST(#{usageDate} AS DATE) AS usage_date,
-            ROUND(COALESCE(ts.electricity_kwh, 0), 2) AS today_usage_kwh,
-            ROUND(COALESCE(ys.electricity_kwh, 0), 2) AS yesterday_usage_kwh,
-            ROUND(COALESCE(ma.monthly_average_kwh, 0), 2) AS monthly_average_kwh,
+            ROUND(COALESCE(tmu.usage_amount, ts.usage_amount, 0), 2) AS today_usage_kwh,
+            ROUND(COALESCE(ymu.usage_amount, ys.usage_amount, 0), 2) AS yesterday_usage_kwh,
+            ROUND(COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0), 2) AS monthly_average_kwh,
             ROUND(
                 CASE
-                    WHEN COALESCE(ys.electricity_kwh, 0) = 0 THEN 0
-                    ELSE (COALESCE(ts.electricity_kwh, 0) - ys.electricity_kwh) / ys.electricity_kwh * 100
+                    WHEN COALESCE(ymu.usage_amount, ys.usage_amount, 0) = 0 THEN 0
+                    ELSE (COALESCE(tmu.usage_amount, ts.usage_amount, 0) - COALESCE(ymu.usage_amount, ys.usage_amount, 0)) / COALESCE(ymu.usage_amount, ys.usage_amount, 0) * 100
                 END,
                 1
             ) AS today_vs_yesterday_rate,
             ROUND(
                 CASE
-                    WHEN COALESCE(ma.monthly_average_kwh, 0) = 0 THEN 0
-                    ELSE (COALESCE(ts.electricity_kwh, 0) - ma.monthly_average_kwh) / ma.monthly_average_kwh * 100
+                    WHEN COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0) = 0 THEN 0
+                    ELSE (COALESCE(tmu.usage_amount, ts.usage_amount, 0) - COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0)) / COALESCE(mma.monthly_average_kwh, ma.monthly_average_kwh, 0) * 100
                 END,
                 1
             ) AS today_vs_monthly_average_rate,
-            COALESCE(lm.latest_measured_at, ts.summary_at) AS latest_measured_at
+            COALESCE(lm.latest_measured_at, tmu.summary_at, ts.summary_at) AS latest_measured_at
         FROM facilities f
         LEFT JOIN target_summary ts ON ts.facility_id = f.id
+        LEFT JOIN target_measurement_usage tmu ON tmu.facility_id = f.id
         LEFT JOIN yesterday_summary ys ON ys.facility_id = f.id
+        LEFT JOIN yesterday_measurement_usage ymu ON ymu.facility_id = f.id
         LEFT JOIN monthly_average ma ON ma.facility_id = f.id
+        LEFT JOIN monthly_measurement_average mma ON mma.facility_id = f.id
         LEFT JOIN latest_measurement lm ON lm.facility_id = f.id
         WHERE f.plant_id = #{plantId}
           AND f.facility_type = #{facilityType}
@@ -712,6 +860,40 @@
             ROUND(COALESCE(SUM(max_kw), 0), 2) AS max_kw
         FROM bucket_facility
         GROUP BY measured_at
+        ORDER BY measured_at ASC
+    </select>
+
+    <select id="findPeakPowerDailyTrend" resultMap="PeakPowerTrendPointResultMap">
+        WITH bucket_facility AS (
+            SELECT
+                plant_id,
+                facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_at,
+                AVG(peak_kw) AS average_kw,
+                MAX(peak_kw) AS max_kw
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
+        ),
+        plant_bucket AS (
+            SELECT
+                measured_at,
+                COALESCE(SUM(average_kw), 0) AS average_kw,
+                COALESCE(SUM(max_kw), 0) AS max_kw
+            FROM bucket_facility
+            GROUP BY measured_at
+        )
+        SELECT
+            TIMESTAMP(DATE(measured_at)) AS measured_at,
+            ROUND(COALESCE(AVG(average_kw), 0), 2) AS average_kw,
+            ROUND(COALESCE(MAX(max_kw), 0), 2) AS max_kw
+        FROM plant_bucket
+        GROUP BY DATE(measured_at)
         ORDER BY measured_at ASC
     </select>
 
@@ -801,6 +983,75 @@
         WHERE peak_kw &gt; #{thresholdKw}
         ORDER BY peak_kw DESC, measured_at DESC
         LIMIT #{limit}
+    </select>
+
+    <select id="findPeakPowerPlantComparison" resultMap="PeakPowerPlantComparisonResultMap">
+        WITH line_facilities AS (
+            SELECT
+                p.id AS plant_id,
+                p.name AS plant_name,
+                COUNT(f.id) AS facility_count
+            FROM plants p
+            LEFT JOIN facilities f
+              ON f.plant_id = p.id
+             AND f.id &gt;= 10000
+             AND MOD(f.id, 10000) BETWEEN 1 AND 24
+            GROUP BY p.id, p.name
+        ),
+        bucket_facility AS (
+            SELECT
+                em.plant_id,
+                em.facility_id,
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(em.measured_at) / 900) * 900) AS measured_at,
+                MAX(em.peak_kw) AS max_kw
+            FROM energy_measurements em
+            WHERE em.measured_at &gt;= #{from}
+              AND em.measured_at &lt; #{to}
+              AND em.peak_kw IS NOT NULL
+              AND em.facility_id &gt;= 10000
+              AND MOD(em.facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY em.plant_id, em.facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(em.measured_at) / 900) * 900)
+        ),
+        plant_bucket AS (
+            SELECT
+                plant_id,
+                measured_at,
+                COALESCE(SUM(max_kw), 0) AS peak_kw
+            FROM bucket_facility
+            GROUP BY plant_id, measured_at
+        ),
+        plant_period AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS period_peak_kw,
+                ROUND(COALESCE(AVG(peak_kw), 0), 2) AS period_average_kw
+            FROM plant_bucket
+            GROUP BY plant_id
+        ),
+        comparison AS (
+            SELECT
+                lf.plant_id,
+                lf.plant_name,
+                COALESCE(pp.period_peak_kw, 0) AS period_peak_kw,
+                COALESCE(pp.period_average_kw, 0) AS period_average_kw,
+                ROUND(#{facilityThresholdKw} * GREATEST(lf.facility_count, 1), 2) AS threshold_kw
+            FROM line_facilities lf
+            LEFT JOIN plant_period pp ON pp.plant_id = lf.plant_id
+        )
+        SELECT
+            plant_id,
+            plant_name,
+            period_peak_kw,
+            period_average_kw,
+            threshold_kw,
+            ROUND(
+                CASE WHEN threshold_kw = 0 THEN 0 ELSE period_peak_kw / threshold_kw * 100 END,
+                1
+            ) AS peak_usage_rate,
+            period_peak_kw &gt; threshold_kw AS exceeded,
+            ROW_NUMBER() OVER (ORDER BY period_peak_kw DESC, plant_id ASC) AS plant_rank
+        FROM comparison
+        ORDER BY plant_rank ASC
     </select>
 
     <select id="findLatestPlantMeasurement" resultMap="EnergyMeasurementResultMap">
@@ -923,6 +1174,129 @@
                 END
             ), 0), 2) AS water_usage_ton
         FROM ordered_measurements
+    </select>
+
+    <select id="findUtilityDailyUsage" resultMap="UtilityHourlyUsageResultMap">
+        WITH ordered_measurements AS (
+            SELECT
+                id,
+                plant_id,
+                facility_id,
+                measured_at,
+                DATE(measured_at) AS usage_date,
+                gas_m3,
+                water_ton,
+                LAG(gas_m3) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_gas_m3,
+                LAG(water_ton) OVER (
+                    PARTITION BY plant_id, facility_id
+                    ORDER BY measured_at ASC, id ASC
+                ) AS previous_water_ton
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+        )
+        SELECT
+            TIMESTAMP(usage_date) AS measured_at,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_gas_m3 IS NULL THEN 0
+                    WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                    ELSE 0
+                END
+            ), 0), 2) AS gas_usage_m3,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN previous_water_ton IS NULL THEN 0
+                    WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                    ELSE 0
+                END
+            ), 0), 2) AS water_usage_ton
+        FROM ordered_measurements
+        GROUP BY usage_date
+        ORDER BY usage_date ASC
+    </select>
+
+    <select id="findUtilityPlantComparison" resultMap="UtilityUsagePlantComparisonResultMap">
+        WITH line_facilities AS (
+            SELECT
+                p.id AS plant_id,
+                p.name AS plant_name
+            FROM plants p
+        ),
+        ordered_measurements AS (
+            SELECT
+                em.id,
+                em.plant_id,
+                em.facility_id,
+                em.measured_at,
+                em.gas_m3,
+                em.water_ton,
+                LAG(em.gas_m3) OVER (
+                    PARTITION BY em.plant_id, em.facility_id
+                    ORDER BY em.measured_at ASC, em.id ASC
+                ) AS previous_gas_m3,
+                LAG(em.water_ton) OVER (
+                    PARTITION BY em.plant_id, em.facility_id
+                    ORDER BY em.measured_at ASC, em.id ASC
+                ) AS previous_water_ton
+            FROM energy_measurements em
+            WHERE em.measured_at &gt;= #{from}
+              AND em.measured_at &lt; #{to}
+              AND em.facility_id &gt;= 10000
+              AND MOD(em.facility_id, 10000) BETWEEN 1 AND 24
+        ),
+        plant_usage AS (
+            SELECT
+                plant_id,
+                ROUND(COALESCE(SUM(
+                    CASE
+                        WHEN previous_gas_m3 IS NULL THEN 0
+                        WHEN gas_m3 &gt;= previous_gas_m3 THEN gas_m3 - previous_gas_m3
+                        ELSE 0
+                    END
+                ), 0), 2) AS gas_usage_m3,
+                ROUND(COALESCE(SUM(
+                    CASE
+                        WHEN previous_water_ton IS NULL THEN 0
+                        WHEN water_ton &gt;= previous_water_ton THEN water_ton - previous_water_ton
+                        ELSE 0
+                    END
+                ), 0), 2) AS water_usage_ton
+            FROM ordered_measurements
+            GROUP BY plant_id
+        ),
+        comparison AS (
+            SELECT
+                lf.plant_id,
+                lf.plant_name,
+                COALESCE(pu.gas_usage_m3, 0) AS gas_usage_m3,
+                COALESCE(pu.water_usage_ton, 0) AS water_usage_ton
+            FROM line_facilities lf
+            LEFT JOIN plant_usage pu ON pu.plant_id = lf.plant_id
+        )
+        SELECT
+            plant_id,
+            plant_name,
+            gas_usage_m3,
+            water_usage_ton,
+            ROUND(
+                CASE WHEN SUM(gas_usage_m3) OVER () = 0 THEN 0 ELSE gas_usage_m3 / SUM(gas_usage_m3) OVER () * 100 END,
+                1
+            ) AS gas_share_rate,
+            ROUND(
+                CASE WHEN SUM(water_usage_ton) OVER () = 0 THEN 0 ELSE water_usage_ton / SUM(water_usage_ton) OVER () * 100 END,
+                1
+            ) AS water_share_rate,
+            ROW_NUMBER() OVER (ORDER BY gas_usage_m3 DESC, plant_id ASC) AS gas_rank,
+            ROW_NUMBER() OVER (ORDER BY water_usage_ton DESC, plant_id ASC) AS water_rank
+        FROM comparison
+        ORDER BY gas_rank ASC
     </select>
 
     <select id="findLatestPlantUtilityMeasurement" resultMap="EnergyMeasurementResultMap">

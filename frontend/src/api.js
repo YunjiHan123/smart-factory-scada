@@ -2,7 +2,7 @@ const TOKEN_KEY = 'scada.accessToken'
 const REFRESH_TOKEN_KEY = 'scada.refreshToken'
 const API_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const REFRESH_PATH = '/api/auth/refresh'
-const AUTH_REFRESH_EXCLUDED_PATHS = new Set(['/api/auth/login', '/api/auth/signup', REFRESH_PATH])
+const PUBLIC_AUTH_PATHS = new Set(['/api/auth/login', '/api/auth/signup', REFRESH_PATH])
 
 let refreshTokenRequest = null
 
@@ -41,6 +41,13 @@ function toQuery(params = {}) {
 
 function resolveUrl(path) {
   return path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+}
+
+function resolvePathname(path) {
+  if (!path.startsWith('http')) {
+    return path.split('?')[0]
+  }
+  return new URL(path).pathname
 }
 
 async function parseResponseBody(response) {
@@ -104,22 +111,24 @@ function getSharedRefreshTokenRequest() {
 }
 
 function shouldRefresh(path, response, retryOnUnauthorized, tokenUsed) {
+  const pathname = resolvePathname(path)
   return (
     retryOnUnauthorized &&
     response.status === 401 &&
     tokenUsed &&
     getRefreshToken() &&
-    !AUTH_REFRESH_EXCLUDED_PATHS.has(path)
+    !PUBLIC_AUTH_PATHS.has(pathname)
   )
 }
 
 export async function apiFetch(path, options = {}, retryOnUnauthorized = true) {
+  const pathname = resolvePathname(path)
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   }
   const token = getAccessToken()
-  if (token) {
+  if (token && !PUBLIC_AUTH_PATHS.has(pathname)) {
     headers.Authorization = `Bearer ${token}`
   }
 
@@ -167,6 +176,7 @@ export const api = {
   latestEnergy: (plantId, facilityId) => apiFetch(`/api/energy/latest/plants/${plantId}/facilities/${facilityId}`),
   alarms: (params) => apiFetch(`/api/alarms${toQuery(params)}`),
   resolveAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}/resolve`, { method: 'PATCH' }),
+  deleteAlarm: (alarmId) => apiFetch(`/api/alarms/${alarmId}`, { method: 'DELETE' }),
   esgScores: (params) => apiFetch(`/api/esg/scores${toQuery(params)}`),
   esgEnvironmentDashboard: (params) => apiFetch(`/api/esg/environment-dashboard${toQuery(params)}`),
   users: (params) => apiFetch(`/api/users${toQuery(params)}`),
