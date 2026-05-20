@@ -1,6 +1,7 @@
 package com.smartfactory.scada.common.config;
 
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +27,11 @@ import lombok.RequiredArgsConstructor;
 @Configuration
 @RequiredArgsConstructor
 public class SecurityConfig {
+
+	private static final List<String> SMWP_CORS_ORIGINS = List.of(
+		"http://192.168.0.100:11005",
+		"http://localhost:11005"
+	);
 
 	private final JwtAuthenticationFilter jwtAuthenticationFilter;
 	private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
@@ -69,7 +75,7 @@ public class SecurityConfig {
 		@Value("${app.cors.allowed-origin-patterns}") String allowedOriginPatterns
 	) {
 		CorsConfiguration configuration = new CorsConfiguration();
-		configuration.setAllowedOriginPatterns(splitCsv(allowedOriginPatterns));
+		configuration.setAllowedOriginPatterns(mergeAllowedOriginPatterns(allowedOriginPatterns));
 		configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 		configuration.setAllowedHeaders(List.of("*"));
 		configuration.setExposedHeaders(List.of("Authorization"));
@@ -89,5 +95,11 @@ public class SecurityConfig {
 			.map(String::trim)
 			.filter(origin -> !origin.isEmpty())
 			.toList();
+	}
+
+	private List<String> mergeAllowedOriginPatterns(String value) {
+		LinkedHashSet<String> origins = new LinkedHashSet<>(splitCsv(value));
+		origins.addAll(SMWP_CORS_ORIGINS);
+		return List.copyOf(origins);
 	}
 }
