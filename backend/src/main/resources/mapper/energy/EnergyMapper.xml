@@ -836,62 +836,92 @@
     </select>
 
     <select id="findPeakPowerTrend" resultMap="PeakPowerTrendPointResultMap">
-        WITH peak_points AS (
+        WITH bucket_facility AS (
             SELECT
                 summary_at AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'HOURLY'
+              AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY summary_at, facility_id
             UNION ALL
             SELECT
                 TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00')) AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_measurements
             WHERE plant_id = #{plantId}
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00')), facility_id
+        ),
+        plant_bucket AS (
+            SELECT
+                measured_at,
+                SUM(peak_kw) AS peak_kw
+            FROM bucket_facility
+            GROUP BY measured_at
         )
         SELECT
             measured_at,
-            ROUND(COALESCE(MAX(peak_kw), 0), 2) AS average_kw,
-            ROUND(COALESCE(MAX(peak_kw), 0), 2) AS max_kw
-        FROM peak_points
-        GROUP BY measured_at
+            ROUND(COALESCE(peak_kw, 0), 2) AS average_kw,
+            ROUND(COALESCE(peak_kw, 0), 2) AS max_kw
+        FROM plant_bucket
         ORDER BY measured_at ASC
     </select>
 
     <select id="findPeakPowerDailyTrend" resultMap="PeakPowerTrendPointResultMap">
-        WITH peak_points AS (
+        WITH bucket_facility AS (
             SELECT
                 summary_at AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'DAILY'
+              AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY summary_at, facility_id
             UNION ALL
             SELECT
                 TIMESTAMP(DATE(measured_at)) AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_measurements
             WHERE plant_id = #{plantId}
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY TIMESTAMP(DATE(measured_at)), facility_id
+        ),
+        plant_bucket AS (
+            SELECT
+                measured_at,
+                SUM(peak_kw) AS peak_kw
+            FROM bucket_facility
+            GROUP BY measured_at
         )
         SELECT
             measured_at,
-            ROUND(COALESCE(MAX(peak_kw), 0), 2) AS average_kw,
-            ROUND(COALESCE(MAX(peak_kw), 0), 2) AS max_kw
-        FROM peak_points
-        GROUP BY measured_at
+            ROUND(COALESCE(peak_kw, 0), 2) AS average_kw,
+            ROUND(COALESCE(peak_kw, 0), 2) AS max_kw
+        FROM plant_bucket
         ORDER BY measured_at ASC
     </select>
 
@@ -908,6 +938,8 @@
               AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY plant_id, facility_id
         ),
         measurement_ordered AS (
@@ -923,6 +955,8 @@
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
               AND facility_id IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
         ),
         measurement_usage AS (
             SELECT
@@ -981,16 +1015,21 @@
     </select>
 
     <select id="findPeakPowerHistory" resultMap="PeakPowerHistoryResultMap">
-        WITH peak_points AS (
+        WITH bucket_facility AS (
             SELECT
                 summary_at AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = CASE WHEN TIMESTAMPDIFF(DAY, #{from}, #{to}) &lt;= 1 THEN 'HOURLY' ELSE 'DAILY' END
+              AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY summary_at, facility_id
             UNION ALL
             SELECT
                 CASE
@@ -998,18 +1037,28 @@
                         THEN TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00'))
                     ELSE TIMESTAMP(DATE(measured_at))
                 END AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_measurements
             WHERE plant_id = #{plantId}
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY
+                CASE
+                    WHEN TIMESTAMPDIFF(DAY, #{from}, #{to}) &lt;= 1
+                        THEN TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00'))
+                    ELSE TIMESTAMP(DATE(measured_at))
+                END,
+                facility_id
         ),
         trend AS (
             SELECT
                 measured_at,
-                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS peak_kw
-            FROM peak_points
+                ROUND(COALESCE(SUM(peak_kw), 0), 2) AS peak_kw
+            FROM bucket_facility
             GROUP BY measured_at
         )
         SELECT
@@ -1041,16 +1090,21 @@
              AND MOD(f.id, 10000) BETWEEN 1 AND 24
             GROUP BY p.id, p.name
         ),
-        peak_points AS (
+        bucket_facility AS (
             SELECT
                 es.plant_id,
                 es.summary_at AS measured_at,
-                es.peak_kw
+                es.facility_id,
+                MAX(es.peak_kw) AS peak_kw
             FROM energy_summaries es
             WHERE es.summary_at &gt;= #{from}
               AND es.summary_at &lt; #{to}
               AND es.summary_type = CASE WHEN TIMESTAMPDIFF(DAY, #{from}, #{to}) &lt;= 1 THEN 'HOURLY' ELSE 'DAILY' END
+              AND es.facility_id IS NOT NULL
               AND es.peak_kw IS NOT NULL
+              AND es.facility_id &gt;= 10000
+              AND MOD(es.facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY es.plant_id, es.summary_at, es.facility_id
             UNION ALL
             SELECT
                 em.plant_id,
@@ -1059,18 +1113,29 @@
                         THEN TIMESTAMP(DATE_FORMAT(em.measured_at, '%Y-%m-%d %H:00:00'))
                     ELSE TIMESTAMP(DATE(em.measured_at))
                 END AS measured_at,
-                em.peak_kw
+                em.facility_id,
+                MAX(em.peak_kw) AS peak_kw
             FROM energy_measurements em
             WHERE em.measured_at &gt;= #{from}
               AND em.measured_at &lt; #{to}
               AND em.peak_kw IS NOT NULL
+              AND em.facility_id &gt;= 10000
+              AND MOD(em.facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY
+                em.plant_id,
+                CASE
+                    WHEN TIMESTAMPDIFF(DAY, #{from}, #{to}) &lt;= 1
+                        THEN TIMESTAMP(DATE_FORMAT(em.measured_at, '%Y-%m-%d %H:00:00'))
+                    ELSE TIMESTAMP(DATE(em.measured_at))
+                END,
+                em.facility_id
         ),
         plant_bucket AS (
             SELECT
                 plant_id,
                 measured_at,
-                COALESCE(MAX(peak_kw), 0) AS peak_kw
-            FROM peak_points
+                COALESCE(SUM(peak_kw), 0) AS peak_kw
+            FROM bucket_facility
             GROUP BY plant_id, measured_at
         ),
         plant_period AS (
@@ -1108,52 +1173,79 @@
     </select>
 
     <select id="findLatestPlantMeasurement" resultMap="EnergyMeasurementResultMap">
+        WITH line_facilities AS (
+            SELECT id AS facility_id
+            FROM facilities
+            WHERE plant_id = #{plantId}
+              AND id &gt;= 10000
+              AND MOD(id, 10000) BETWEEN 1 AND 24
+        ),
+        latest_per_facility AS (
+            SELECT em.*
+            FROM line_facilities lf
+            JOIN energy_measurements em
+              ON em.id = (
+                  SELECT lookup.id
+                  FROM energy_measurements lookup
+                  WHERE lookup.plant_id = #{plantId}
+                    AND lookup.facility_id = lf.facility_id
+                    AND lookup.measured_at &gt;= #{from}
+                    AND lookup.measured_at &lt; #{to}
+                    AND lookup.peak_kw IS NOT NULL
+                  ORDER BY lookup.measured_at DESC, lookup.id DESC
+                  LIMIT 1
+              )
+        )
         SELECT
-            id,
+            NULL AS id,
             plant_id,
-            facility_id,
-            measured_at,
-            electricity_kwh,
-            gas_m3,
-            water_ton,
-            solar_kwh,
-            peak_kw,
-            created_at
-        FROM energy_measurements
-        WHERE plant_id = #{plantId}
-          AND measured_at &gt;= #{from}
-          AND measured_at &lt; #{to}
-          AND peak_kw IS NOT NULL
-        ORDER BY measured_at DESC, id DESC
-        LIMIT 1
+            NULL AS facility_id,
+            MAX(measured_at) AS measured_at,
+            COALESCE(SUM(electricity_kwh), 0) AS electricity_kwh,
+            COALESCE(SUM(gas_m3), 0) AS gas_m3,
+            COALESCE(SUM(water_ton), 0) AS water_ton,
+            COALESCE(SUM(solar_kwh), 0) AS solar_kwh,
+            COALESCE(SUM(peak_kw), 0) AS peak_kw,
+            NULL AS created_at
+        FROM latest_per_facility
+        GROUP BY plant_id
     </select>
 
     <select id="findElectricityBillingDemandPeak" resultMap="ElectricityBillingDemandPeakResultMap">
-        WITH peak_points AS (
+        WITH bucket_facility AS (
             SELECT
                 summary_at AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_summaries
             WHERE plant_id = #{plantId}
               AND summary_type = 'HOURLY'
+              AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY summary_at, facility_id
             UNION ALL
             SELECT
                 TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00')) AS measured_at,
-                peak_kw
+                facility_id,
+                MAX(peak_kw) AS peak_kw
             FROM energy_measurements
             WHERE plant_id = #{plantId}
               AND measured_at &gt;= #{from}
               AND measured_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND facility_id &gt;= 10000
+              AND MOD(facility_id, 10000) BETWEEN 1 AND 24
+            GROUP BY TIMESTAMP(DATE_FORMAT(measured_at, '%Y-%m-%d %H:00:00')), facility_id
         ),
         plant_bucket AS (
             SELECT
                 measured_at,
-                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS peak_kw
-            FROM peak_points
+                ROUND(COALESCE(SUM(peak_kw), 0), 2) AS peak_kw
+            FROM bucket_facility
             GROUP BY measured_at
         )
         SELECT

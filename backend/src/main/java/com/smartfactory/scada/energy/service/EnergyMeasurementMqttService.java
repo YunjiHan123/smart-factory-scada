@@ -1,6 +1,7 @@
 package com.smartfactory.scada.energy.service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -70,14 +71,19 @@ public class EnergyMeasurementMqttService {
 				}
 
 				long startedAt = System.currentTimeMillis();
-				energyService.saveMeasurement(normalizedMessage);
-				energyRealtimeWebSocketHandler.broadcast(normalizedMessage);
+				EnergyMeasurement savedMeasurement = energyService.saveMeasurement(normalizedMessage);
+				EnergyMeasurementMessage realtimeMessage = toMessage(savedMeasurement);
+				latestGeneratedMeasurements.put(
+					measurementKey(realtimeMessage.getPlantId(), realtimeMessage.getFacilityId()),
+					realtimeMessage
+				);
+				energyRealtimeWebSocketHandler.broadcast(realtimeMessage);
 				log.info(
 					"MQTT energy message persisted and broadcast. topic={}, plantId={}, facilityId={}, measuredAt={}, elapsedMs={}",
 					topic,
-					normalizedMessage.getPlantId(),
-					normalizedMessage.getFacilityId(),
-					normalizedMessage.getMeasuredAt(),
+					realtimeMessage.getPlantId(),
+					realtimeMessage.getFacilityId(),
+					realtimeMessage.getMeasuredAt(),
 					System.currentTimeMillis() - startedAt
 				);
 			}
@@ -242,7 +248,7 @@ public class EnergyMeasurementMqttService {
 				previousSourceSolar,
 				weight
 			),
-			source.getPeakKw()
+			scaledValue(source.getPeakKw(), weight)
 		);
 		latestGeneratedMeasurements.put(generatedKey, generated);
 		return generated;
@@ -258,13 +264,17 @@ public class EnergyMeasurementMqttService {
 		return new EnergyMeasurementMessage(
 			measurement.getPlantId(),
 			measurement.getFacilityId(),
-			measurement.getMeasuredAt() == null ? null : measurement.getMeasuredAt().atZone(SERVICE_ZONE).toInstant(),
+			toInstant(measurement.getMeasuredAt()),
 			valueOf(measurement.getElectricityKwh()),
 			valueOf(measurement.getGasM3()),
 			valueOf(measurement.getWaterTon()),
 			valueOf(measurement.getSolarKwh()),
 			valueOf(measurement.getPeakKw())
 		);
+	}
+
+	private java.time.Instant toInstant(LocalDateTime measuredAt) {
+		return measuredAt == null ? null : measuredAt.atZone(SERVICE_ZONE).toInstant();
 	}
 
 	private Long parseLong(String value) {
