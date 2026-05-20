@@ -1354,29 +1354,16 @@ const peakMetrics = computed(() => {
 
   const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
   const thresholdKw = Number(metrics.thresholdKw || PLANT_PEAK_THRESHOLD_KW)
-  const intervalPoints = peakTrendPoints.value
   const currentIntervalAt = live.measuredAt
-  const recentCutoff = Date.parse(currentIntervalAt || '') - 15 * 60 * 1000
-  const recentRows = liveEnergyEntries.value.filter((row) => {
-    const measuredAt = Date.parse(row.measuredAt || '')
-    return Number(row.plantId) === Number(selectedPlantId.value) && measuredAt >= recentCutoff
-  })
-  const recentPeaks = recentRows.map((row) => metricNumber(row, 'peakKw', 'peak_kw')).filter((value) => value > 0)
-  const intervalAverageKw = recentPeaks.length
-    ? recentPeaks.reduce((sum, value) => sum + value, 0) / recentPeaks.length
-    : Math.min(currentKw, Number(metrics.intervalAverageKw || currentKw * 0.96))
-  const intervalMaxKw = recentPeaks.length
-    ? Math.max(...recentPeaks)
-    : Math.max(currentKw, Number(metrics.intervalMaxKw || currentKw))
-  return {
-    ...metrics,
-    currentKw,
-    peakUsageRate: thresholdKw ? Math.min((currentKw / thresholdKw) * 100, 999) : 0,
-    intervalAverageKw,
-    intervalMaxKw,
-    intervalAt: currentIntervalAt || intervalPoints.at(-1)?.measuredAt || metrics.intervalAt,
-    measuredAt: live.measuredAt,
-  }
+ return {
+   ...metrics,
+   currentKw,
+   peakUsageRate: thresholdKw ? Math.min((currentKw / thresholdKw) * 100, 999) : 0,
+    intervalAverageKw: currentKw,
+    intervalMaxKw: currentKw,
+    intervalAt: currentIntervalAt || metrics.intervalAt,
+   measuredAt: live.measuredAt,
+ }
 })
 const peakTrend = computed(() => {
   const rows = [...(state.peakDashboard?.trend || [])]
@@ -1430,24 +1417,28 @@ const peakComparisonMax = computed(() =>
   Math.max(1, ...peakPlantComparison.value.map((plant) => Number(plant.periodPeakKw || plant.period_peak_kw || 0))),
 )
 const selectedPeakPlantComparison = computed(() =>
-  peakPlantComparison.value.find((plant) => Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)) || null,
+  peakComparisonRows.value.find((plant) => Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)) || null,
 )
 const peakComparisonRows = computed(() =>
   peakPlantComparison.value
     .map((plant, index) => {
-      const peakKw = Number(plant.periodPeakKw || plant.period_peak_kw || 0)
+      const active = Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)
+      const livePeakKw = selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value && active
+        ? Number(peakMetrics.value.currentKw || 0)
+        : 0
+      const peakKw = livePeakKw > 0 ? livePeakKw : Number(plant.periodPeakKw || plant.period_peak_kw || 0)
       const thresholdKw = Number(plant.thresholdKw || plant.threshold_kw || 0)
       return {
         plantId: plant.plantId || plant.plant_id,
         plantName: plant.plantName || plant.plant_name || `공장 ${plant.plantId || plant.plant_id}`,
         rank: plant.rank || plant.plant_rank || index + 1,
         periodPeakKw: peakKw,
-        periodAverageKw: Number(plant.periodAverageKw || plant.period_average_kw || 0),
+        periodAverageKw: livePeakKw > 0 ? livePeakKw : Number(plant.periodAverageKw || plant.period_average_kw || 0),
         thresholdKw,
-        peakUsageRate: Number(plant.peakUsageRate || plant.peak_usage_rate || 0),
-        exceeded: plant.exceeded === true || plant.exceeded === 1 || plant.exceeded === 'true',
+        peakUsageRate: thresholdKw ? (peakKw / thresholdKw) * 100 : Number(plant.peakUsageRate || plant.peak_usage_rate || 0),
+        exceeded: thresholdKw ? peakKw > thresholdKw : plant.exceeded === true || plant.exceeded === 1 || plant.exceeded === 'true',
         barWidth: `${Math.max(6, Math.round((peakKw / peakComparisonMax.value) * 100))}%`,
-        active: Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value),
+        active,
       }
     })
     .sort((a, b) => a.rank - b.rank),
