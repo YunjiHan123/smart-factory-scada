@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
@@ -47,13 +48,21 @@ public class SmwpEnergyService {
 		}
 
 		Plant plant = findPlantByName(plantName);
+		LocalDate today = LocalDate.now(SERVICE_ZONE);
 
-		SmwpDailyEnergyUsage usage = energyMapper.findSmwpDailyEnergy(
-			plant.getId(),
-			date.atStartOfDay(),
-			date.plusDays(1).atStartOfDay()
-		).orElseGet(() -> emptyUsage(plant.getId()));
-		usage = fillDailyFromSummaryIfEmpty(plant.getId(), date, usage);
+		SmwpDailyEnergyUsage usage;
+		if (date.equals(today)) {
+			usage = dailySummaryUsage(plant.getId(), date)
+				.orElseGet(() -> emptyUsage(plant.getId()));
+			addRealtimeDelta(plant.getId(), date, usage);
+		} else {
+			usage = energyMapper.findSmwpDailyEnergy(
+				plant.getId(),
+				date.atStartOfDay(),
+				date.plusDays(1).atStartOfDay()
+			).orElseGet(() -> emptyUsage(plant.getId()));
+			usage = fillDailyFromSummaryIfEmpty(plant.getId(), date, usage);
+		}
 
 		return new SmwpDailyEnergyResponse(
 			plant.getId(),
@@ -94,7 +103,7 @@ public class SmwpEnergyService {
 		SmwpDailyEnergyUsage currentHourUsage = null;
 		if (isToday) {
 			LocalDateTime hourStart = now.withMinute(0).withSecond(0).withNano(0);
-			currentHourUsage = energyMapper.findSmwpDailyEnergy(
+			currentHourUsage = energyMapper.findSmwpMeasurementDeltaEnergy(
 				plant.getId(),
 				hourStart,
 				now
@@ -116,10 +125,11 @@ public class SmwpEnergyService {
 			}
 
 			if (isToday && hour == currentHour) {
-				electricity.add(zeroIfNull(currentHourUsage.getElectricityKwh()));
-				gas.add(zeroIfNull(currentHourUsage.getGasM3()));
-				water.add(zeroIfNull(currentHourUsage.getWaterTon()));
-				solar.add(zeroIfNull(currentHourUsage.getSolarKwh()));
+				SmwpHourlyEnergyPoint point = pointsByHour.get(hour);
+				electricity.add(add(zeroIfNull(point == null ? null : point.getElectricityKwh()), currentHourUsage.getElectricityKwh()));
+				gas.add(add(zeroIfNull(point == null ? null : point.getGasM3()), currentHourUsage.getGasM3()));
+				water.add(add(zeroIfNull(point == null ? null : point.getWaterTon()), currentHourUsage.getWaterTon()));
+				solar.add(add(zeroIfNull(point == null ? null : point.getSolarKwh()), currentHourUsage.getSolarKwh()));
 				continue;
 			}
 
@@ -179,6 +189,71 @@ public class SmwpEnergyService {
 		usage.setWaterTon(BigDecimal.ZERO);
 		usage.setSolarKwh(BigDecimal.ZERO);
 		return usage;
+	}
+
+	private Optional<SmwpDailyEnergyUsage> dailySummaryUsage(Long plantId, LocalDate date) {
+		List<EnergySummary> summaries = energyMapper.findSummaries(
+			plantId,
+			null,
+			SummaryType.DAILY,
+			date.atStartOfDay(),
+			date.plusDays(1).atStartOfDay()
+		);
+		if (summaries.isEmpty()) {
+			return Optional.empty();
+		}
+
+		EnergySummary summary = summaries.get(0);
+		SmwpDailyEnergyUsage usage = emptyUsage(plantId);
+		usage.setElectricityKwh(zeroIfNull(summary.getElectricityKwh()));
+		usage.setGasM3(zeroIfNull(summary.getGasM3()));
+		usage.setWaterTon(zeroIfNull(summary.getWaterTon()));
+		usage.setSolarKwh(zeroIfNull(summary.getSolarKwh()));
+		usage.setLatestMeasuredAt(summary.getSummaryAt());
+		return Optional.of(usage);
+	}
+
+	private void addRealtimeDelta(Long plantId, LocalDate date, SmwpDailyEnergyUsage usage) {
+		LocalDateTime now = LocalDateTime.now(SERVICE_ZONE);
+		LocalDateTime from = realtimeDeltaFrom(plantId, date, now);
+		if (!from.isBefore(now)) {
+			return;
+		}
+
+		SmwpDailyEnergyUsage delta = energyMapper.findSmwpMeasurementDeltaEnergy(
+			plantId,
+			from,
+			now
+		).orElseGet(() -> emptyUsage(plantId));
+
+		usage.setElectricityKwh(add(usage.getElectricityKwh(), delta.getElectricityKwh()));
+		usage.setGasM3(add(usage.getGasM3(), delta.getGasM3()));
+		usage.setWaterTon(add(usage.getWaterTon(), delta.getWaterTon()));
+		usage.setSolarKwh(add(usage.getSolarKwh(), delta.getSolarKwh()));
+		if (delta.getLatestMeasuredAt() != null) {
+			usage.setLatestMeasuredAt(delta.getLatestMeasuredAt());
+		}
+	}
+
+	private LocalDateTime realtimeDeltaFrom(Long plantId, LocalDate date, LocalDateTime now) {
+		LocalDateTime currentHourStart = now.withMinute(0).withSecond(0).withNano(0);
+		List<EnergySummary> summaries = energyMapper.findSummaries(
+			plantId,
+			null,
+			SummaryType.HOURLY,
+			date.atStartOfDay(),
+			currentHourStart.minusNanos(1)
+		);
+		if (summaries.isEmpty()) {
+			return date.atStartOfDay();
+		}
+
+		LocalDateTime summaryEnd = summaries.get(summaries.size() - 1).getSummaryAt().plusHours(1);
+		return summaryEnd.isAfter(now) ? now : summaryEnd;
+	}
+
+	private BigDecimal add(BigDecimal left, BigDecimal right) {
+		return zeroIfNull(left).add(zeroIfNull(right));
 	}
 
 	private SmwpDailyEnergyUsage fillDailyFromSummaryIfEmpty(
