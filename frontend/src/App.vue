@@ -3180,7 +3180,6 @@ onUnmounted(() => {
           <img :src="brandLogoUrl" :alt="`${PLATFORM_NAME} logo`" />
           <span>{{ PLATFORM_NAME }}</span>
         </div>
-        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다</h2>
         <p class="login-tagline">{{ PLATFORM_TAGLINE }}</p>
         <div class="login-lines"></div>
       </article>
