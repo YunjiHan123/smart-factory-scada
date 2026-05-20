@@ -742,6 +742,9 @@ public class EnergyService {
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {
-		return LocalDateTime.now(SERVICE_ZONE);
+		if (message == null || message.getMeasuredAt() == null) {
+			return LocalDateTime.now(SERVICE_ZONE);
+		}
+		return LocalDateTime.ofInstant(message.getMeasuredAt(), SERVICE_ZONE);
 	}
 }
