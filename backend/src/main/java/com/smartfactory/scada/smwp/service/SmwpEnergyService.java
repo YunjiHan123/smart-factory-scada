@@ -103,7 +103,7 @@ public class SmwpEnergyService {
 		}
 
 		if (isToday) {
-			LocalDateTime realtimeFrom = realtimeDeltaFrom(plant.getId(), date, now);
+			LocalDateTime realtimeFrom = date.atStartOfDay();
 			LocalDateTime realtimeTo = date.plusDays(1).atStartOfDay();
 			if (realtimeFrom.isBefore(realtimeTo)) {
 				List<SmwpHourlyEnergyPoint> realtimePoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(
@@ -213,7 +213,7 @@ public class SmwpEnergyService {
 
 	private void addRealtimeDelta(Long plantId, LocalDate date, SmwpDailyEnergyUsage usage) {
 		LocalDateTime now = LocalDateTime.now(SERVICE_ZONE);
-		LocalDateTime from = realtimeDeltaFrom(plantId, date, now);
+		LocalDateTime from = date.atStartOfDay();
 		LocalDateTime to = date.plusDays(1).atStartOfDay();
 		if (!from.isBefore(to)) {
 			return;
