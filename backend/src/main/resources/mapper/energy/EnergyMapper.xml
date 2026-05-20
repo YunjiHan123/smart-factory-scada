@@ -151,7 +151,8 @@
             gas_m3,
             water_ton,
             solar_kwh,
-            peak_kw
+            peak_kw,
+            created_at
         )
         VALUES (
             #{plantId},
@@ -161,7 +162,8 @@
             #{gasM3},
             #{waterTon},
             #{solarKwh},
-            #{peakKw}
+            #{peakKw},
+            #{createdAt}
         )
     </insert>
 
@@ -1350,7 +1352,10 @@
                 WHERE plant_id = #{plantId}
                   AND measured_at &gt;= #{from}
                   AND measured_at &lt; #{to}
-                  AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                  AND (
+                    facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                    OR facility_id BETWEEN (#{plantId} * 100 + 1) AND (#{plantId} * 100 + 4)
+                  )
             ) ranked_points
             GROUP BY facility_id
         ) points
@@ -1425,7 +1430,10 @@
                 WHERE plant_id = #{plantId}
                   AND measured_at &gt;= #{from}
                   AND measured_at &lt; #{to}
-                  AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                  AND (
+                    facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                    OR facility_id BETWEEN (#{plantId} * 100 + 1) AND (#{plantId} * 100 + 4)
+                  )
             ) ranked_points
             GROUP BY facility_id, HOUR(measured_at)
         ) points
