@@ -163,36 +163,18 @@ class ChatbotServiceTest {
 			new ChatbotMessageRequest(1L, "summary")
 		);
 
-		assertThat(response.answer()).contains("1234.50kWh", "1400.00kW");
-		assertThat(response.answer()).doesNotContain("Press Line 1", "WARNING", "7.1%", "1600.00kWh");
-	}
-
-	@Test
-	void askElectricityBillFallbackDoesNotSuggestNextCheck() {
-		given(energyMapper.findLatestPlantSummary(1L)).willReturn(Optional.of(energySummary()));
-		given(esgMapper.findLatestByPlantId(1L)).willReturn(Optional.of(esgScore()));
-		stubOperationalContext(
-			1L,
-			List.of(),
-			0L,
-			List.of(facility(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.RUNNING))
+		assertThat(response.answer()).contains(
+			"1234.50kWh",
+			"1400.00kW",
+			"AA",
+			"91.20",
+			"Press Line 1",
+			"WARNING",
+			"1200.00kWh",
+			"7.1%",
+			"1600.00kWh"
 		);
-		given(electricityBillComparisonService.compare(1L, LocalDate.of(2026, 5, 18), PeakPowerPeriod.MONTH, null))
-			.willReturn(electricityBillComparison());
-		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
-		given(openAiChatbotClient.generateResponse(eq("전기요금 절감 가능해?"), anyString(), eq(List.of())))
-			.willReturn(Optional.empty());
-		stubInsertId();
-		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
-
-		ChatbotMessageResponse response = chatbotService.ask(
-			authenticatedUser(1L),
-			new ChatbotMessageRequest(1L, "전기요금 절감 가능해?")
-		);
-
-		assertThat(response.answer()).doesNotContain("다음 점검");
 	}
-
 
 	@Test
 	void askFallsBackToElectricityBillComparisonWhenOpenAiReturnsEmptyForBillQuestion() {

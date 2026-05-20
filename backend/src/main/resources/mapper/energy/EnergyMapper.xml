@@ -1072,6 +1072,7 @@
             #{thresholdKw} AS threshold_kw,
             peak_kw &gt; #{thresholdKw} AS exceeded
         FROM trend
+        WHERE peak_kw &gt; #{thresholdKw}
         ORDER BY peak_kw DESC, measured_at DESC
         LIMIT #{limit}
     </select>
