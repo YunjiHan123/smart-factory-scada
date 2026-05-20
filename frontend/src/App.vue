@@ -2717,12 +2717,13 @@ function chatbotChartRows(spec) {
   const labels = Array.isArray(spec.labels) ? spec.labels : []
   const firstSeries = spec.series?.[0] || {}
   const values = Array.isArray(firstSeries.values) ? firstSeries.values : []
+  const colors = Array.isArray(spec.colors) ? spec.colors : []
   const maxValue = chatbotChartMax(spec)
   return values.map((value, index) => ({
     label: labels[index] || firstSeries.name || `항목 ${index + 1}`,
     value: Number(value) || 0,
     rate: Math.max(3, Math.min(100, ((Number(value) || 0) / maxValue) * 100)),
-    color: firstSeries.color || '#0f6fff',
+    color: colors[index] || firstSeries.color || '#0f6fff',
   }))
 }
 

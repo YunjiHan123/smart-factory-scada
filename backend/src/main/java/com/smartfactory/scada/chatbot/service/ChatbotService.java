@@ -157,21 +157,54 @@ public class ChatbotService {
 			return buildElectricityBillFallbackText(operationalContext.electricityBillComparison());
 		}
 
-		String energyText = operationalContext.latestEnergySummary() == null
-			? "\ucd5c\uadfc \uc5d0\ub108\uc9c0 \uc9d1\uacc4 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."
-			: "\ucd5c\uadfc \uc804\ub825 \uc0ac\uc6a9\ub7c9\uc740 "
-				+ operationalContext.latestEnergySummary().getElectricityKwh()
-				+ "kWh, \ud53c\ud06c \uc804\ub825\uc740 "
-				+ operationalContext.latestEnergySummary().getPeakKw() + "kW\uc785\ub2c8\ub2e4.";
-		String esgText = operationalContext.latestEsgScore() == null
-			? "\ucd5c\uc2e0 ESG \uc810\uc218 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."
-			: "\ucd5c\uc2e0 ESG \ub4f1\uae09\uc740 " + operationalContext.latestEsgScore().getGrade()
-				+ ", \ucd1d\uc810\uc740 " + operationalContext.latestEsgScore().getTotalScore() + "\uc810\uc785\ub2c8\ub2e4.";
-		String alarmText = buildAlarmFallbackText(operationalContext);
-		String facilityText = buildFacilityFallbackText(operationalContext.facilityStatusSummary());
-		String trendText = buildTrendFallbackText(operationalContext.trendInsights());
-		String facilityLineText = buildFacilityLineFallbackText(operationalContext.facilityLineUsageSummary());
-		return energyText + " " + esgText + " " + alarmText + " " + facilityText + " " + trendText + " " + facilityLineText;
+		if (isAlarmQuestion(question)) {
+			return buildAlarmFallbackText(operationalContext);
+		}
+		if (isFacilityStatusQuestion(question)) {
+			return buildFacilityFallbackText(operationalContext.facilityStatusSummary());
+		}
+		if (isFacilityUsageQuestion(question)) {
+			return buildFacilityLineFallbackText(operationalContext.facilityLineUsageSummary());
+		}
+		if (isEsgQuestion(question)) {
+			return buildEsgFallbackText(operationalContext.latestEsgScore());
+		}
+		if (isTrendQuestion(question)) {
+			return buildTrendFallbackText(operationalContext.trendInsights());
+		}
+		if (isPeakQuestion(question)) {
+			return buildPeakFallbackText(operationalContext.latestEnergySummary(), operationalContext.trendInsights());
+		}
+		return buildEnergyFallbackText(operationalContext.latestEnergySummary());
+	}
+
+	private String buildEnergyFallbackText(EnergySummary latestEnergySummary) {
+		if (latestEnergySummary == null) {
+			return "\ucd5c\uadfc \uc5d0\ub108\uc9c0 \uc9d1\uacc4 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
+		}
+		return "\ucd5c\uadfc \uc804\ub825 \uc0ac\uc6a9\ub7c9\uc740 " + latestEnergySummary.getElectricityKwh()
+			+ "kWh, \uac00\uc2a4 " + latestEnergySummary.getGasM3()
+			+ "m3, \uc6a9\uc218 " + latestEnergySummary.getWaterTon()
+			+ "ton, \ud0dc\uc591\uad11 " + latestEnergySummary.getSolarKwh() + "kWh\uc785\ub2c8\ub2e4.";
+	}
+
+	private String buildPeakFallbackText(EnergySummary latestEnergySummary, TrendInsights trendInsights) {
+		if (latestEnergySummary == null) {
+			return "\ucd5c\uadfc \ud53c\ud06c \uc804\ub825 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
+		}
+		String maxPeakText = trendInsights.maxPeakDate() == null
+			? ""
+			: " \ucd5c\uadfc 7\uc77c \uc911 \ucd5c\ub300 \ud53c\ud06c\ub294 " + trendInsights.maxPeakDate()
+				+ " " + formatDecimal(trendInsights.maxPeakKw()) + "kW\uc785\ub2c8\ub2e4.";
+		return "\ucd5c\uc2e0 \ud53c\ud06c \uc804\ub825\uc740 " + latestEnergySummary.getPeakKw() + "kW\uc785\ub2c8\ub2e4." + maxPeakText;
+	}
+
+	private String buildEsgFallbackText(EsgScore latestEsgScore) {
+		if (latestEsgScore == null) {
+			return "\ucd5c\uc2e0 ESG \uc810\uc218 \ub370\uc774\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.";
+		}
+		return "\ucd5c\uc2e0 ESG \ub4f1\uae09\uc740 " + latestEsgScore.getGrade()
+			+ ", \ucd1d\uc810\uc740 " + latestEsgScore.getTotalScore() + "\uc810\uc785\ub2c8\ub2e4.";
 	}
 
 	private String buildElectricityBillFallbackText(ElectricityBillComparisonResponse comparison) {
@@ -186,8 +219,7 @@ public class ChatbotService {
 			+ comparison.baseTariffName() + " 추정 합계는 " + formatMoney(comparison.baseEstimatedTotalKrw()) + "원입니다. "
 			+ "가장 낮은 요금제는 " + comparison.bestTariffName() + "이며 추정 합계는 "
 			+ formatMoney(comparison.bestEstimatedTotalKrw()) + "원입니다. "
-			+ savingText + " 이 값은 부가세, 기후환경요금, 연료비조정액 등을 제외한 추정치입니다. "
-			+ "다음 점검은 산정 피크 " + formatDecimal(comparison.billingDemandKw()) + "kW와 최대부하 시간대 사용량을 확인하세요.";
+			+ savingText + " 이 값은 부가세, 기후환경요금, 연료비조정액 등을 제외한 추정치입니다.";
 	}
 
 	private String buildAlarmFallbackText(OperationalContext operationalContext) {
@@ -479,24 +511,23 @@ public class ChatbotService {
 			return null;
 		}
 
+		Map<String, Object> chart;
 		if (isElectricityBillQuestion(question)) {
-			Map<String, Object> billChart = buildElectricityBillComparisonChart(operationalContext.electricityBillComparison());
-			if (billChart == null) {
-				return null;
-			}
-			try {
-				return objectMapper.writeValueAsString(billChart);
-			}
-			catch (JsonProcessingException exception) {
-				return null;
-			}
+			chart = buildElectricityBillComparisonChart(operationalContext.electricityBillComparison());
+		}
+		else if (isFacilityUsageQuestion(question)) {
+			chart = buildFacilityUsageChart(operationalContext.facilityLineUsageSummary());
+		}
+		else if (isEnergyMixQuestion(question)) {
+			chart = buildEnergyMixChart(operationalContext.latestEnergySummary());
+		}
+		else if (isPeakQuestion(question)) {
+			chart = buildPeakTrendChart(operationalContext.dailyEnergyTrend());
+		}
+		else {
+			chart = buildDailyTrendChart(operationalContext.dailyEnergyTrend());
 		}
 
-		Map<String, Object> chart = questionContains(question, "설비", "라인", "상위")
-			? buildFacilityUsageChart(operationalContext.facilityLineUsageSummary())
-			: questionContains(question, "비중", "구성", "믹스", "태양광", "가스", "용수")
-				? buildEnergyMixChart(operationalContext.latestEnergySummary())
-				: buildDailyTrendChart(operationalContext.dailyEnergyTrend());
 		if (chart == null) {
 			return null;
 		}
@@ -510,17 +541,45 @@ public class ChatbotService {
 	}
 
 	private boolean wantsChart(String question) {
-		return questionContains(question, "그래프", "차트", "시각화", "그려", "그려줘", "추이", "비교");
+		return questionContains(question, "차트", "그래프", "추이", "비교", "시각화", "그려", "보여줘", "표");
 	}
 
 	private boolean isElectricityBillQuestion(String question) {
-		return questionContains(question, "전기요금", "전기세", "요금제", "절감", "비용", "요금", "원");
+		return questionContains(question, "전기요금", "전기세", "전기료", "요금제", "절감");
+	}
+
+	private boolean isEnergyMixQuestion(String question) {
+		return questionContains(question, "비중", "구성", "믹스", "에너지별", "종류별", "혼합", "분포");
+	}
+
+	private boolean isAlarmQuestion(String question) {
+		return questionContains(question, "알람", "알림", "경고", "위험", "이상", "장애", "미처리");
+	}
+
+	private boolean isFacilityStatusQuestion(String question) {
+		return questionContains(question, "설비 상태", "비정상 설비", "정지", "고장", "warning", "running");
+	}
+
+	private boolean isFacilityUsageQuestion(String question) {
+		return questionContains(question, "설비 사용량", "라인 사용량", "상위", "순위", "랭킹", "많이 쓴", "사용량 높은");
+	}
+
+	private boolean isEsgQuestion(String question) {
+		return questionContains(question, "esg", "ESG", "등급", "점수", "환경");
+	}
+
+	private boolean isTrendQuestion(String question) {
+		return questionContains(question, "추이", "최근 7일", "일주일", "변화", "증감", "전일", "평균");
+	}
+
+	private boolean isPeakQuestion(String question) {
+		return questionContains(question, "피크", "peak", "최대전력", "최대 전력", "kW");
 	}
 
 	private boolean questionContains(String question, String... keywords) {
-		String normalizedQuestion = question == null ? "" : question;
+		String normalizedQuestion = question == null ? "" : question.toLowerCase();
 		for (String keyword : keywords) {
-			if (normalizedQuestion.contains(keyword)) {
+			if (normalizedQuestion.contains(keyword.toLowerCase())) {
 				return true;
 			}
 		}
@@ -535,7 +594,7 @@ public class ChatbotService {
 			"type", "line",
 			"title", "최근 7일 에너지 사용량 추이",
 			"unit", "사용량",
-			"labels", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::summaryDate).toList(),
+			"labels", dailyEnergyTrend.stream().map(point -> point.summaryDate().toString()).toList(),
 			"series", List.of(
 				chartSeries("전기(kWh)", "#0f6fff", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::electricityKwh).toList()),
 				chartSeries("가스(m3)", "#ff8a00", dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::gasM3).toList()),
@@ -572,6 +631,7 @@ public class ChatbotService {
 			"title", "최신 에너지 사용량 구성",
 			"unit", "현재 집계값",
 			"labels", List.of("전기(kWh)", "가스(m3)", "용수(ton)", "태양광(kWh)"),
+			"colors", List.of("#0f6fff", "#ff8a00", "#14bfd4", "#45c742"),
 			"series", List.of(chartSeries(
 				"에너지",
 				"#0f6fff",
@@ -581,6 +641,23 @@ public class ChatbotService {
 					zeroIfNull(latestEnergySummary.getWaterTon()),
 					zeroIfNull(latestEnergySummary.getSolarKwh())
 				)
+			))
+		);
+	}
+
+	private Map<String, Object> buildPeakTrendChart(List<DailyEnergyTrendPoint> dailyEnergyTrend) {
+		if (dailyEnergyTrend == null || dailyEnergyTrend.isEmpty()) {
+			return null;
+		}
+		return Map.of(
+			"type", "line",
+			"title", "최근 7일 피크 전력 추이",
+			"unit", "kW",
+			"labels", dailyEnergyTrend.stream().map(point -> point.summaryDate().toString()).toList(),
+			"series", List.of(chartSeries(
+				"피크 전력(kW)",
+				"#f43f5e",
+				dailyEnergyTrend.stream().map(DailyEnergyTrendPoint::peakKw).toList()
 			))
 		);
 	}
