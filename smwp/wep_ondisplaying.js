@@ -2,9 +2,7 @@ if (!window.SMWP_DISPLAYING_READY) {
     window.SMWP_DISPLAYING_READY = true;
 
     var SMWP_DISPLAY_API_BASE_URL =
-        window.SMWP_API_BASE_URL || 'http://localhost:8080';
-    var SMWP_DEFAULT_USER_NAME = '';
-
+        window.SMWP_API_BASE_URL || 'https://smart-factory-scada-backend.onrender.com';
 
     var SMWP_HOURLY_CHART_DOM_ID = smwpDisplayNormalizeId(CustomCharts5.id);
 
@@ -73,60 +71,12 @@ if (!window.SMWP_DISPLAYING_READY) {
         return dateText === smwpDisplayTodayText();
     }
 
-    function smwpDisplayQueryParam(name) {
-        var query = window.location.search || '';
-
-        if (query.charAt(0) === '?') {
-            query = query.substring(1);
-        }
-
-        var pairs = query.split('&');
-
-        for (var i = 0; i < pairs.length; i++) {
-            var pair = pairs[i].split('=');
-
-            if (decodeURIComponent(pair[0] || '') === name) {
-                return decodeURIComponent((pair[1] || '').replace(/\+/g, ' '));
-            }
-        }
-
-        return '';
-    }
-
     function smwpDisplayPlantName() {
-        if (typeof window.smwpPlantName === 'function' && window.smwpPlantName !== smwpDisplayPlantName) {
+        if (typeof window.smwpPlantName === 'function') {
             return window.smwpPlantName();
         }
 
-        var plantName = smwpDisplayQueryParam('plantName');
-
-        if (plantName && plantName !== '') {
-            return plantName;
-        }
-
         return '현대 아산';
-    }
-
-    function smwpDisplayUserName() {
-        if (typeof window.smwpUserName === 'function' && window.smwpUserName !== smwpDisplayUserName) {
-            return window.smwpUserName();
-        }
-
-        var userName = smwpDisplayQueryParam('userName');
-
-        if (!userName || userName === '') {
-            userName = SMWP_DEFAULT_USER_NAME;
-        }
-
-        return userName;
-    }
-
-    if (typeof window.smwpPlantName !== 'function') {
-        window.smwpPlantName = smwpDisplayPlantName;
-    }
-
-    if (typeof window.smwpUserName !== 'function') {
-        window.smwpUserName = smwpDisplayUserName;
     }
 
     function smwpFindChartInstance(domId) {

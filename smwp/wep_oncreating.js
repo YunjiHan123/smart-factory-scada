@@ -1,7 +1,5 @@
-var SMWP_API_BASE_URL = 'http://localhost:8080';
+var SMWP_API_BASE_URL = 'https://smart-factory-scada-backend.onrender.com';
 var SMWP_DEFAULT_PLANT_NAME = '현대 아산';
-var SMWP_DEFAULT_USER_NAME = '';
-
 
 function smwpNormalizeId(id) {
     if (!id) return '';
@@ -18,15 +16,6 @@ var SMWP_SELECTED_DATE = '';
 var SMWP_CARD_TIMER = null;
 var SMWP_CARD_REFRESH_MS = 1000;
 var SMWP_CARD_REQUEST_RUNNING = false;
-function smwpUserName() {
-    var userName = smwpQueryParam('userName');
-
-    if (!userName || userName === '') {
-        userName = SMWP_DEFAULT_USER_NAME;
-    }
-
-    return userName;
-}
 
 function smwpFormatDate(date) {
     var y = date.getFullYear();
@@ -208,7 +197,6 @@ function smwpSetSearchDate(dateText) {
 
 window.smwpSetSearchDate = smwpSetSearchDate;
 window.smwpTodayText = smwpTodayText;
-window.smwpUserName = smwpUserName;
 window.smwpIsToday = smwpIsToday;
 window.smwpPlantName = smwpPlantName;
 window.SMWP_API_BASE_URL = SMWP_API_BASE_URL;

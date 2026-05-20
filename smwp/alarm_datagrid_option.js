@@ -1,8 +1,7 @@
 var SMWP_ALARM_API_BASE_URL =
     (typeof window.SMWP_API_BASE_URL !== 'undefined')
         ? window.SMWP_API_BASE_URL
-        : 'http://localhost:8080';
-
+        : 'https://smart-factory-scada-backend.onrender.com'
 function smwpAlarmQueryParam(name) {
     var query = window.location.search || '';
     var hash = window.location.hash || '';
@@ -73,8 +72,8 @@ function smwpAlarmLoadRows(done) {
 
 $('#' + id).datagrid({
     columns: [[
-        { field: '1', title: '발생 시간', width: 100 },
-        { field: '2', title: '내용', width: 470 }
+        { field: '1', title: '발생 시간', width: 150 },
+        { field: '2', title: '내용', width: 420 }
     ]],
     data: []
 });
