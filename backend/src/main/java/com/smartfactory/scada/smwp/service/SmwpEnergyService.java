@@ -81,20 +81,13 @@ public class SmwpEnergyService {
 		int currentHour = now.getHour();
 
 		Map<Integer, SmwpHourlyEnergyPoint> pointsByHour = new HashMap<>();
-		List<SmwpHourlyEnergyPoint> hourlyPoints = energyMapper.findSmwpHourlyEnergy(plant.getId(), from, to);
+		List<SmwpHourlyEnergyPoint> hourlyPoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to);
 		if (hourlyPoints.isEmpty()) {
-			hourlyPoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to);
+			hourlyPoints = energyMapper.findSmwpHourlyEnergy(plant.getId(), from, to);
 		}
 		for (SmwpHourlyEnergyPoint point : hourlyPoints) {
 			if (point.getHour() != null) {
 				pointsByHour.put(point.getHour(), point);
-			}
-		}
-		if (isToday) {
-			for (SmwpHourlyEnergyPoint point : energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to)) {
-				if (point.getHour() != null) {
-					pointsByHour.put(point.getHour(), point);
-				}
 			}
 		}
 
