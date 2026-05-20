@@ -70,4 +70,10 @@
         WHERE id = #{id}
           AND user_id = #{userId}
     </delete>
+
+    <delete id="deleteByUserIdAndPlantId">
+        DELETE FROM chatbot_messages
+        WHERE user_id = #{userId}
+          AND plant_id = #{plantId}
+    </delete>
 </mapper>

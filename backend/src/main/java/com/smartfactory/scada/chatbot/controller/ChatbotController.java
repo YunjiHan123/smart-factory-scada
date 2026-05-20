@@ -58,4 +58,13 @@ public class ChatbotController {
 	) {
 		chatbotService.deleteMessage(authenticatedUser, messageId);
 	}
+
+	@DeleteMapping
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deletePlantMessages(
+		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
+		@RequestParam Long plantId
+	) {
+		chatbotService.deleteMessagesByPlant(authenticatedUser, plantId);
+	}
 }

@@ -5362,7 +5362,25 @@ td {
   border-radius: 8px;
 }
 
-.chatbot-bubble span {
+.chatbot-title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chatbot-title-actions span {
+  color: #4b6083;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.chatbot-title-actions .light-button {
+  gap: 6px;
+}
+
+.chatbot-bubble > span {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5371,7 +5389,7 @@ td {
   font-weight: 900;
 }
 
-.chatbot-bubble small {
+.chatbot-bubble > span small {
   margin-left: auto;
   color: #6b7d99;
 }
@@ -5440,9 +5458,29 @@ td {
 
 .chatbot-markdown li,
 .chatbot-markdown p {
+  margin: 0;
   color: #15223a;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.chatbot-markdown strong {
+  color: #0b1633;
+  font-weight: 900;
+}
+
+.chatbot-markdown em {
+  font-style: italic;
+}
+
+.chatbot-markdown code {
+  padding: 1px 5px;
+  color: #0f3f86;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
+  background: #edf4ff;
+  border: 1px solid #d6e6ff;
+  border-radius: 5px;
 }
 
 .chatbot-bubble.user {

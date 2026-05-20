@@ -58,6 +58,7 @@ const utilityTooltip = ref(null)
 const chatbotQuestion = ref('')
 const chatbotSending = ref(false)
 const chatbotDeletingId = ref(null)
+const chatbotClearing = ref(false)
 const userCreating = ref(false)
 const usersLoading = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
@@ -2032,6 +2033,16 @@ function sortedAlarms(alarms) {
   })
 }
 
+function mergeById(rows) {
+  const merged = new Map()
+  rows.forEach((row) => {
+    if (row?.id != null) {
+      merged.set(Number(row.id), row)
+    }
+  })
+  return Array.from(merged.values())
+}
+
 function activeAlarmKeyword(group) {
   const current = alarmActiveKeywords[group.key]
   if (group.keywordTabs.some((tab) => tab.key === current)) {
@@ -2401,20 +2412,29 @@ async function loadDashboardData() {
 async function loadAlarms(options = {}) {
   const { silent = false } = options || {}
   const requestId = ++alarmsRequestId
+  const plantId = selectedPlantId.value || undefined
 
   if (!silent) {
     alarmsLoading.value = true
   }
 
   try {
-    const alarms = await api.alarms({
-      plantId: selectedPlantId.value || undefined,
-      limit: 200,
-    })
+    const [occurredAlarms, resolvedAlarms] = await Promise.all([
+      api.alarms({
+        plantId,
+        status: 'OCCURRED',
+        limit: 100,
+      }),
+      api.alarms({
+        plantId,
+        status: 'RESOLVED',
+        limit: 50,
+      }),
+    ])
     if (requestId !== alarmsRequestId) {
       return
     }
-    state.alarms = alarms
+    state.alarms = mergeById([...occurredAlarms, ...resolvedAlarms])
   } finally {
     if (!silent && requestId === alarmsRequestId) {
       alarmsLoading.value = false
@@ -2495,6 +2515,22 @@ async function deleteChatbotMessage(messageId) {
   }
 }
 
+async function clearCurrentPlantChatbotMessages() {
+  if (!selectedPlantId.value || chatbotClearing.value || !state.chatbotMessages.length) {
+    return
+  }
+
+  chatbotClearing.value = true
+  try {
+    await run(async () => {
+      await api.clearChatbotMessages(selectedPlantId.value)
+      state.chatbotMessages = []
+    })
+  } finally {
+    chatbotClearing.value = false
+  }
+}
+
 function useSuggestedQuestion(question) {
   chatbotQuestion.value = question
 }
@@ -2557,6 +2593,32 @@ function markdownBlocks(text) {
   flushParagraph()
   flushList()
   return blocks.length ? blocks : [{ type: 'paragraph', text: String(text || '') }]
+}
+
+function inlineMarkdownSegments(text) {
+  const source = String(text || '')
+  const segments = []
+  const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g
+  let lastIndex = 0
+  let match
+
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', text: source.slice(lastIndex, match.index) })
+    }
+
+    segments.push({
+      type: match[2] ? 'strong' : match[3] ? 'code' : 'em',
+      text: match[2] || match[3] || match[4] || '',
+    })
+    lastIndex = pattern.lastIndex
+  }
+
+  if (lastIndex < source.length) {
+    segments.push({ type: 'text', text: source.slice(lastIndex) })
+  }
+
+  return segments.length ? segments : [{ type: 'text', text: source }]
 }
 
 function parseChatbotJson(value, fallback = null) {
@@ -3002,15 +3064,20 @@ function scheduleAlarmRefresh() {
 
 async function resolveAlarm(alarmId) {
   await run(async () => {
-    await api.resolveAlarm(alarmId)
-    await loadAlarms({ silent: true })
+    const resolvedAlarm = await api.resolveAlarm(alarmId)
+    state.alarms = mergeById([
+      resolvedAlarm,
+      ...state.alarms.filter((alarm) => Number(alarm.id) !== Number(alarmId)),
+    ])
+    lastAlarmRefreshAt = Date.now()
   })
 }
 
 async function deleteAlarm(alarmId) {
   await run(async () => {
     await api.deleteAlarm(alarmId)
-    await loadAlarms({ silent: true })
+    state.alarms = state.alarms.filter((alarm) => Number(alarm.id) !== Number(alarmId))
+    lastAlarmRefreshAt = Date.now()
   })
 }
 
@@ -4618,7 +4685,18 @@ onUnmounted(() => {
           <article class="panel chatbot-conversation-panel">
             <div class="panel-title inline">
               <h2>AI 상담 대화</h2>
-              <span>{{ selectedPlant?.name || '-' }}</span>
+              <div class="chatbot-title-actions">
+                <span>{{ selectedPlant?.name || '-' }}</span>
+                <button
+                  class="light-button compact"
+                  type="button"
+                  :disabled="chatbotClearing || !selectedPlantId || !state.chatbotMessages.length"
+                  title="현재 사업장 채팅 기록 지우기"
+                  @click="clearCurrentPlantChatbotMessages"
+                >
+                  <Trash2 :size="14" /> 기록 지우기
+                </button>
+              </div>
             </div>
 
             <div class="chatbot-message-list">
@@ -4647,13 +4725,63 @@ onUnmounted(() => {
                       v-for="(block, blockIndex) in markdownBlocks(message.answer)"
                       :key="`${message.id}-markdown-${blockIndex}`"
                     >
-                      <h3 v-if="block.type === 'h1'">{{ block.text }}</h3>
-                      <h4 v-else-if="block.type === 'h2'">{{ block.text }}</h4>
-                      <h5 v-else-if="block.type === 'h3'">{{ block.text }}</h5>
+                      <h3 v-if="block.type === 'h1'">
+                        <template
+                          v-for="(segment, segmentIndex) in inlineMarkdownSegments(block.text)"
+                          :key="`${message.id}-h1-${blockIndex}-${segmentIndex}`"
+                        >
+                          <strong v-if="segment.type === 'strong'">{{ segment.text }}</strong>
+                          <code v-else-if="segment.type === 'code'">{{ segment.text }}</code>
+                          <em v-else-if="segment.type === 'em'">{{ segment.text }}</em>
+                          <span v-else>{{ segment.text }}</span>
+                        </template>
+                      </h3>
+                      <h4 v-else-if="block.type === 'h2'">
+                        <template
+                          v-for="(segment, segmentIndex) in inlineMarkdownSegments(block.text)"
+                          :key="`${message.id}-h2-${blockIndex}-${segmentIndex}`"
+                        >
+                          <strong v-if="segment.type === 'strong'">{{ segment.text }}</strong>
+                          <code v-else-if="segment.type === 'code'">{{ segment.text }}</code>
+                          <em v-else-if="segment.type === 'em'">{{ segment.text }}</em>
+                          <span v-else>{{ segment.text }}</span>
+                        </template>
+                      </h4>
+                      <h5 v-else-if="block.type === 'h3'">
+                        <template
+                          v-for="(segment, segmentIndex) in inlineMarkdownSegments(block.text)"
+                          :key="`${message.id}-h3-${blockIndex}-${segmentIndex}`"
+                        >
+                          <strong v-if="segment.type === 'strong'">{{ segment.text }}</strong>
+                          <code v-else-if="segment.type === 'code'">{{ segment.text }}</code>
+                          <em v-else-if="segment.type === 'em'">{{ segment.text }}</em>
+                          <span v-else>{{ segment.text }}</span>
+                        </template>
+                      </h5>
                       <ul v-else-if="block.type === 'list'">
-                        <li v-for="item in block.items" :key="item">{{ item }}</li>
+                        <li v-for="(item, itemIndex) in block.items" :key="`${message.id}-item-${blockIndex}-${itemIndex}`">
+                          <template
+                            v-for="(segment, segmentIndex) in inlineMarkdownSegments(item)"
+                            :key="`${message.id}-item-${blockIndex}-${itemIndex}-${segmentIndex}`"
+                          >
+                            <strong v-if="segment.type === 'strong'">{{ segment.text }}</strong>
+                            <code v-else-if="segment.type === 'code'">{{ segment.text }}</code>
+                            <em v-else-if="segment.type === 'em'">{{ segment.text }}</em>
+                            <span v-else>{{ segment.text }}</span>
+                          </template>
+                        </li>
                       </ul>
-                      <p v-else>{{ block.text }}</p>
+                      <p v-else>
+                        <template
+                          v-for="(segment, segmentIndex) in inlineMarkdownSegments(block.text)"
+                          :key="`${message.id}-p-${blockIndex}-${segmentIndex}`"
+                        >
+                          <strong v-if="segment.type === 'strong'">{{ segment.text }}</strong>
+                          <code v-else-if="segment.type === 'code'">{{ segment.text }}</code>
+                          <em v-else-if="segment.type === 'em'">{{ segment.text }}</em>
+                          <span v-else>{{ segment.text }}</span>
+                        </template>
+                      </p>
                     </template>
                   </div>
                   <div v-if="chatbotChartSpec(message)" class="chatbot-chart-card">

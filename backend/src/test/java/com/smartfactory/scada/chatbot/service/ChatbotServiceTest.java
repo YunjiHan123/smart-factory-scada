@@ -310,6 +310,23 @@ class ChatbotServiceTest {
 		then(openAiChatbotClient).shouldHaveNoInteractions();
 	}
 
+	@Test
+	void deleteMessagesByPlantDeletesOnlyCurrentUsersSelectedPlantMessages() {
+		chatbotService.deleteMessagesByPlant(authenticatedUser(1L), 1L);
+
+		then(chatbotMapper).should().deleteByUserIdAndPlantId(100L, 1L);
+	}
+
+	@Test
+	void deleteMessagesByPlantThrowsAuthenticationRequiredWhenUserIsMissing() {
+		assertThatThrownBy(() -> chatbotService.deleteMessagesByPlant(null, 1L))
+			.isInstanceOfSatisfying(BusinessException.class, exception ->
+				assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.AUTHENTICATION_REQUIRED)
+			);
+
+		then(chatbotMapper).shouldHaveNoInteractions();
+	}
+
 	private void stubOperationalContext(Long plantId, List<Alarm> alarms, long occurredAlarmCount, List<Facility> facilities) {
 		stubOperationalContext(plantId, alarms, occurredAlarmCount, facilities, trendSummaries(), lineUsages());
 	}

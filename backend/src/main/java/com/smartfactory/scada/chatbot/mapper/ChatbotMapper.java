@@ -25,4 +25,9 @@ public interface ChatbotMapper {
 		@Param("id") Long id,
 		@Param("userId") Long userId
 	);
+
+	int deleteByUserIdAndPlantId(
+		@Param("userId") Long userId,
+		@Param("plantId") Long plantId
+	);
 }
