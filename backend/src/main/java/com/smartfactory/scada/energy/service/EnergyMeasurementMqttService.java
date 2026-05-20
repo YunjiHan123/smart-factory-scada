@@ -12,7 +12,9 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.dto.EnergyMeasurementMessage;
+import com.smartfactory.scada.energy.mapper.EnergyMapper;
 import com.smartfactory.scada.energy.websocket.EnergyRealtimeWebSocketHandler;
 import com.smartfactory.scada.facility.mapper.FacilityMapper;
 
@@ -30,6 +32,7 @@ public class EnergyMeasurementMqttService {
 	private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
 
 	private final ObjectMapper objectMapper;
+	private final EnergyMapper energyMapper;
 	private final EnergyService energyService;
 	private final EnergyRealtimeWebSocketHandler energyRealtimeWebSocketHandler;
 	private final FacilityMapper facilityMapper;
@@ -173,7 +176,10 @@ public class EnergyMeasurementMqttService {
 		LegacyMeasurementSnapshot previousLine
 	) {
 		String generatedKey = measurementKey(source.getPlantId(), generatedFacilityId);
-		EnergyMeasurementMessage previousGenerated = latestGeneratedMeasurements.get(generatedKey);
+		EnergyMeasurementMessage previousGenerated = latestGeneratedMeasurements.computeIfAbsent(
+			generatedKey,
+			key -> latestGeneratedMeasurement(source.getPlantId(), generatedFacilityId)
+		);
 		Double sourceElectricity = source.getElectricityKwh();
 		Double sourceGas = source.getGasM3();
 		Double sourceWater = source.getWaterTon();
@@ -240,6 +246,25 @@ public class EnergyMeasurementMqttService {
 		);
 		latestGeneratedMeasurements.put(generatedKey, generated);
 		return generated;
+	}
+
+	private EnergyMeasurementMessage latestGeneratedMeasurement(Long plantId, Long facilityId) {
+		return energyMapper.findLatestMeasurement(plantId, facilityId)
+			.map(this::toMessage)
+			.orElse(null);
+	}
+
+	private EnergyMeasurementMessage toMessage(EnergyMeasurement measurement) {
+		return new EnergyMeasurementMessage(
+			measurement.getPlantId(),
+			measurement.getFacilityId(),
+			measurement.getMeasuredAt() == null ? null : measurement.getMeasuredAt().atZone(SERVICE_ZONE).toInstant(),
+			valueOf(measurement.getElectricityKwh()),
+			valueOf(measurement.getGasM3()),
+			valueOf(measurement.getWaterTon()),
+			valueOf(measurement.getSolarKwh()),
+			valueOf(measurement.getPeakKw())
+		);
 	}
 
 	private Long parseLong(String value) {

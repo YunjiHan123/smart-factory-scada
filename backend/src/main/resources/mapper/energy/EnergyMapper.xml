@@ -1332,13 +1332,26 @@
         FROM (
             SELECT
                 facility_id,
-                MIN(id) AS first_id,
-                MAX(id) AS latest_id
-            FROM energy_measurements
-            WHERE plant_id = #{plantId}
-              AND measured_at &gt;= #{from}
-              AND measured_at &lt; #{to}
-              AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                MAX(CASE WHEN first_rank = 1 THEN id END) AS first_id,
+                MAX(CASE WHEN latest_rank = 1 THEN id END) AS latest_id
+            FROM (
+                SELECT
+                    id,
+                    facility_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY facility_id
+                        ORDER BY measured_at ASC, id ASC
+                    ) AS first_rank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY facility_id
+                        ORDER BY measured_at DESC, id DESC
+                    ) AS latest_rank
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND measured_at &gt;= #{from}
+                  AND measured_at &lt; #{to}
+                  AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+            ) ranked_points
             GROUP BY facility_id
         ) points
         JOIN energy_measurements first ON first.id = points.first_id
@@ -1393,13 +1406,27 @@
             SELECT
                 facility_id,
                 HOUR(measured_at) AS usage_hour,
-                MIN(id) AS first_id,
-                MAX(id) AS latest_id
-            FROM energy_measurements
-            WHERE plant_id = #{plantId}
-              AND measured_at &gt;= #{from}
-              AND measured_at &lt; #{to}
-              AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+                MAX(CASE WHEN first_rank = 1 THEN id END) AS first_id,
+                MAX(CASE WHEN latest_rank = 1 THEN id END) AS latest_id
+            FROM (
+                SELECT
+                    id,
+                    facility_id,
+                    measured_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY facility_id, HOUR(measured_at)
+                        ORDER BY measured_at ASC, id ASC
+                    ) AS first_rank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY facility_id, HOUR(measured_at)
+                        ORDER BY measured_at DESC, id DESC
+                    ) AS latest_rank
+                FROM energy_measurements
+                WHERE plant_id = #{plantId}
+                  AND measured_at &gt;= #{from}
+                  AND measured_at &lt; #{to}
+                  AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+            ) ranked_points
             GROUP BY facility_id, HOUR(measured_at)
         ) points
         JOIN energy_measurements first ON first.id = points.first_id
