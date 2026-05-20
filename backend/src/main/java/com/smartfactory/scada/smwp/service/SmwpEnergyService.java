@@ -31,7 +31,9 @@ import com.smartfactory.scada.smwp.dto.SmwpHourlyEnergyPoint;
 import com.smartfactory.scada.smwp.dto.SmwpHourlyEnergyResponse;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SmwpEnergyService {
@@ -100,14 +102,19 @@ public class SmwpEnergyService {
 			}
 		}
 
-		SmwpDailyEnergyUsage currentHourUsage = null;
 		if (isToday) {
-			LocalDateTime hourStart = now.withMinute(0).withSecond(0).withNano(0);
-			currentHourUsage = energyMapper.findSmwpMeasurementDeltaEnergy(
-				plant.getId(),
-				hourStart,
-				now
-			).orElseGet(() -> emptyUsage(plant.getId()));
+			LocalDateTime realtimeFrom = realtimeDeltaFrom(plant.getId(), date, now);
+			LocalDateTime realtimeTo = date.plusDays(1).atStartOfDay();
+			if (realtimeFrom.isBefore(realtimeTo)) {
+				List<SmwpHourlyEnergyPoint> realtimePoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(
+					plant.getId(),
+					realtimeFrom,
+					realtimeTo
+				);
+				for (SmwpHourlyEnergyPoint point : realtimePoints) {
+					mergeHourlyPoint(pointsByHour, point);
+				}
+			}
 		}
 
 		List<String> labels = new ArrayList<>();
@@ -115,21 +122,12 @@ public class SmwpEnergyService {
 		List<BigDecimal> gas = new ArrayList<>();
 		List<BigDecimal> water = new ArrayList<>();
 		List<BigDecimal> solar = new ArrayList<>();
-		LocalDateTime latestMeasuredAt = currentHourUsage == null ? null : currentHourUsage.getLatestMeasuredAt();
+		LocalDateTime latestMeasuredAt = isToday ? now : null;
 
 		for (int hour = 0; hour <= 24; hour++) {
 			labels.add(String.format("%02d:00", hour));
 			if (hour == 24 || (isToday && hour > currentHour)) {
 				addZeros(electricity, gas, water, solar);
-				continue;
-			}
-
-			if (isToday && hour == currentHour) {
-				SmwpHourlyEnergyPoint point = pointsByHour.get(hour);
-				electricity.add(add(zeroIfNull(point == null ? null : point.getElectricityKwh()), currentHourUsage.getElectricityKwh()));
-				gas.add(add(zeroIfNull(point == null ? null : point.getGasM3()), currentHourUsage.getGasM3()));
-				water.add(add(zeroIfNull(point == null ? null : point.getWaterTon()), currentHourUsage.getWaterTon()));
-				solar.add(add(zeroIfNull(point == null ? null : point.getSolarKwh()), currentHourUsage.getSolarKwh()));
 				continue;
 			}
 
@@ -216,15 +214,30 @@ public class SmwpEnergyService {
 	private void addRealtimeDelta(Long plantId, LocalDate date, SmwpDailyEnergyUsage usage) {
 		LocalDateTime now = LocalDateTime.now(SERVICE_ZONE);
 		LocalDateTime from = realtimeDeltaFrom(plantId, date, now);
-		if (!from.isBefore(now)) {
+		LocalDateTime to = date.plusDays(1).atStartOfDay();
+		if (!from.isBefore(to)) {
 			return;
 		}
 
 		SmwpDailyEnergyUsage delta = energyMapper.findSmwpMeasurementDeltaEnergy(
 			plantId,
 			from,
-			now
+			to
 		).orElseGet(() -> emptyUsage(plantId));
+
+		log.info(
+			"[SMWP Daily] realtime delta. plantId={}, date={}, from={}, to={}, now={}, electricity={}, gas={}, water={}, solar={}, latestMeasuredAt={}",
+			plantId,
+			date,
+			from,
+			to,
+			now,
+			delta.getElectricityKwh(),
+			delta.getGasM3(),
+			delta.getWaterTon(),
+			delta.getSolarKwh(),
+			delta.getLatestMeasuredAt()
+		);
 
 		usage.setElectricityKwh(add(usage.getElectricityKwh(), delta.getElectricityKwh()));
 		usage.setGasM3(add(usage.getGasM3(), delta.getGasM3()));
@@ -242,7 +255,7 @@ public class SmwpEnergyService {
 			null,
 			SummaryType.HOURLY,
 			date.atStartOfDay(),
-			currentHourStart.minusNanos(1)
+			currentHourStart.minusSeconds(1)
 		);
 		if (summaries.isEmpty()) {
 			return date.atStartOfDay();
@@ -250,6 +263,23 @@ public class SmwpEnergyService {
 
 		LocalDateTime summaryEnd = summaries.get(summaries.size() - 1).getSummaryAt().plusHours(1);
 		return summaryEnd.isAfter(now) ? now : summaryEnd;
+	}
+
+	private void mergeHourlyPoint(Map<Integer, SmwpHourlyEnergyPoint> pointsByHour, SmwpHourlyEnergyPoint point) {
+		if (point == null || point.getHour() == null) {
+			return;
+		}
+
+		SmwpHourlyEnergyPoint existing = pointsByHour.get(point.getHour());
+		if (existing == null) {
+			pointsByHour.put(point.getHour(), point);
+			return;
+		}
+
+		existing.setElectricityKwh(add(existing.getElectricityKwh(), point.getElectricityKwh()));
+		existing.setGasM3(add(existing.getGasM3(), point.getGasM3()));
+		existing.setWaterTon(add(existing.getWaterTon(), point.getWaterTon()));
+		existing.setSolarKwh(add(existing.getSolarKwh(), point.getSolarKwh()));
 	}
 
 	private BigDecimal add(BigDecimal left, BigDecimal right) {
