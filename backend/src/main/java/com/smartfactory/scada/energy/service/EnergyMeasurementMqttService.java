@@ -27,6 +27,7 @@ public class EnergyMeasurementMqttService {
 	private static final long GENERATED_FACILITY_ID_OFFSET = 10_000L;
 	private static final double[] LINE_EQUIPMENT_WEIGHTS = {0.22, 0.18, 0.16, 0.15, 0.14, 0.15};
 	private static final int LINE_EQUIPMENT_COUNT = LINE_EQUIPMENT_WEIGHTS.length;
+	private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
 
 	private final ObjectMapper objectMapper;
 	private final EnergyService energyService;
@@ -312,7 +313,7 @@ public class EnergyMeasurementMqttService {
 		if (electricityKwh == null || measuredAt == null) {
 			return null;
 		}
-		int hour = LocalTime.ofInstant(measuredAt, ZoneId.systemDefault()).getHour();
+		int hour = LocalTime.ofInstant(measuredAt, SERVICE_ZONE).getHour();
 		if (hour < 7 || hour > 18) {
 			return 0.0;
 		}

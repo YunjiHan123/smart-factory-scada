@@ -68,6 +68,7 @@ public class EnergyService {
 	private static final BigDecimal GAS_CRITICAL_DELTA = BigDecimal.valueOf(15);
 	private static final BigDecimal WATER_WARNING_DELTA = BigDecimal.valueOf(1.5);
 	private static final BigDecimal WATER_CRITICAL_DELTA = BigDecimal.valueOf(3);
+	private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
 
 	private final EnergyMapper energyMapper;
 	private final FacilityMapper facilityMapper;
@@ -727,8 +728,8 @@ public class EnergyService {
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {
 		if (message.getMeasuredAt() == null) {
-			return LocalDateTime.now();
+			return LocalDateTime.now(SERVICE_ZONE);
 		}
-		return LocalDateTime.ofInstant(message.getMeasuredAt(), ZoneId.systemDefault());
+		return LocalDateTime.ofInstant(message.getMeasuredAt(), SERVICE_ZONE);
 	}
 }

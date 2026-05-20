@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,6 +34,8 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class SmwpEnergyService {
+
+	private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
 
 	private final PlantMapper plantMapper;
 	private final EnergyMapper energyMapper;
@@ -72,9 +75,10 @@ public class SmwpEnergyService {
 		Plant plant = findPlantByName(plantName);
 		LocalDateTime from = date.atStartOfDay();
 		LocalDateTime to = date.plusDays(1).atStartOfDay();
-		LocalDate today = LocalDate.now();
+		LocalDate today = LocalDate.now(SERVICE_ZONE);
 		boolean isToday = date.equals(today);
-		int currentHour = LocalDateTime.now().getHour();
+		LocalDateTime now = LocalDateTime.now(SERVICE_ZONE);
+		int currentHour = now.getHour();
 
 		Map<Integer, SmwpHourlyEnergyPoint> pointsByHour = new HashMap<>();
 		List<SmwpHourlyEnergyPoint> hourlyPoints = energyMapper.findSmwpHourlyEnergy(plant.getId(), from, to);
@@ -96,11 +100,11 @@ public class SmwpEnergyService {
 
 		SmwpDailyEnergyUsage currentHourUsage = null;
 		if (isToday) {
-			LocalDateTime hourStart = LocalDateTime.now().withMinute(0).withSecond(0).withNano(0);
+			LocalDateTime hourStart = now.withMinute(0).withSecond(0).withNano(0);
 			currentHourUsage = energyMapper.findSmwpDailyEnergy(
 				plant.getId(),
 				hourStart,
-				LocalDateTime.now()
+				now
 			).orElseGet(() -> emptyUsage(plant.getId()));
 		}
 
@@ -189,7 +193,7 @@ public class SmwpEnergyService {
 		LocalDate date,
 		SmwpDailyEnergyUsage usage
 	) {
-		if (usage.getLatestMeasuredAt() != null || date.equals(LocalDate.now())) {
+		if (usage.getLatestMeasuredAt() != null || date.equals(LocalDate.now(SERVICE_ZONE))) {
 			return usage;
 		}
 
