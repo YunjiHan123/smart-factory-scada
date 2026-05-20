@@ -53,6 +53,7 @@ public class SmwpEnergyService {
 			date.atStartOfDay(),
 			date.plusDays(1).atStartOfDay()
 		).orElseGet(() -> emptyUsage(plant.getId()));
+		usage = fillDailyFromSummaryIfEmpty(plant.getId(), date, usage);
 
 		return new SmwpDailyEnergyResponse(
 			plant.getId(),
@@ -80,7 +81,10 @@ public class SmwpEnergyService {
 		int currentHour = now.getHour();
 
 		Map<Integer, SmwpHourlyEnergyPoint> pointsByHour = new HashMap<>();
-		List<SmwpHourlyEnergyPoint> hourlyPoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to);
+		List<SmwpHourlyEnergyPoint> hourlyPoints = energyMapper.findSmwpHourlyEnergy(plant.getId(), from, to);
+		if (hourlyPoints.isEmpty()) {
+			hourlyPoints = energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to);
+		}
 		for (SmwpHourlyEnergyPoint point : hourlyPoints) {
 			if (point.getHour() != null) {
 				pointsByHour.put(point.getHour(), point);
@@ -174,6 +178,35 @@ public class SmwpEnergyService {
 		usage.setGasM3(BigDecimal.ZERO);
 		usage.setWaterTon(BigDecimal.ZERO);
 		usage.setSolarKwh(BigDecimal.ZERO);
+		return usage;
+	}
+
+	private SmwpDailyEnergyUsage fillDailyFromSummaryIfEmpty(
+		Long plantId,
+		LocalDate date,
+		SmwpDailyEnergyUsage usage
+	) {
+		if (usage.getLatestMeasuredAt() != null || date.equals(LocalDate.now(SERVICE_ZONE))) {
+			return usage;
+		}
+
+		List<EnergySummary> summaries = energyMapper.findSummaries(
+			plantId,
+			null,
+			SummaryType.DAILY,
+			date.atStartOfDay(),
+			date.plusDays(1).atStartOfDay()
+		);
+		if (summaries.isEmpty()) {
+			return usage;
+		}
+
+		EnergySummary summary = summaries.get(0);
+		usage.setElectricityKwh(zeroIfNull(summary.getElectricityKwh()));
+		usage.setGasM3(zeroIfNull(summary.getGasM3()));
+		usage.setWaterTon(zeroIfNull(summary.getWaterTon()));
+		usage.setSolarKwh(zeroIfNull(summary.getSolarKwh()));
+		usage.setLatestMeasuredAt(summary.getSummaryAt());
 		return usage;
 	}
 
