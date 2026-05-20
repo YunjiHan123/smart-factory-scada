@@ -1,6 +1,13 @@
 var SMWP_API_BASE_URL = 'http://localhost:8080';
-
 var SMWP_DEFAULT_PLANT_NAME = '현대 아산';
+var SMWP_DEFAULT_USER_NAME = '';
+
+
+function smwpNormalizeId(id) {
+    if (!id) return '';
+    if (id.charAt(0) === '#') return id.substring(1);
+    return id;
+}
 
 var SMWP_DATEBOX_ID =
     (typeof DateBox1 !== 'undefined' && DateBox1.id)
@@ -11,15 +18,14 @@ var SMWP_SELECTED_DATE = '';
 var SMWP_CARD_TIMER = null;
 var SMWP_CARD_REFRESH_MS = 1000;
 var SMWP_CARD_REQUEST_RUNNING = false;
+function smwpUserName() {
+    var userName = smwpQueryParam('userName');
 
-function smwpNormalizeId(id) {
-    if (!id) return '';
-
-    if (id.charAt(0) === '#') {
-        return id.substring(1);
+    if (!userName || userName === '') {
+        userName = SMWP_DEFAULT_USER_NAME;
     }
 
-    return id;
+    return userName;
 }
 
 function smwpFormatDate(date) {
@@ -129,8 +135,6 @@ function smwpRefreshCards(dateText) {
 
     SMWP_CARD_REQUEST_RUNNING = true;
 
-    console.log('[SMWP Card] request:', smwpCardApiUrl(dateText));
-
     fetch(smwpCardApiUrl(dateText))
         .then(function (response) {
             if (!response.ok) {
@@ -181,6 +185,16 @@ function smwpStartCardRealtime() {
     loop();
 }
 
+function smwpRefreshAllCharts(dateText) {
+    if (typeof window.SMWPRefreshEnergyChart === 'function') {
+        window.SMWPRefreshEnergyChart(dateText);
+    }
+
+    if (typeof window.SMWPRefreshCompareCharts === 'function') {
+        window.SMWPRefreshCompareCharts(dateText);
+    }
+}
+
 function smwpSetSearchDate(dateText) {
     SMWP_SELECTED_DATE = dateText || smwpTodayText();
     window.SMWP_SELECTED_DATE = SMWP_SELECTED_DATE;
@@ -189,23 +203,12 @@ function smwpSetSearchDate(dateText) {
 
     smwpRefreshCards(SMWP_SELECTED_DATE);
     smwpStartCardRealtime();
-
-    if (typeof window.SMWPRefreshEnergyChart === 'function') {
-        window.SMWPRefreshEnergyChart(SMWP_SELECTED_DATE);
-    } else {
-        console.warn('[SMWP Chart] refresh function not ready');
-    }
-
-    if (typeof window.SMWPRefreshElectricityCompareChart === 'function') {
-        window.SMWPRefreshElectricityCompareChart(SMWP_SELECTED_DATE);
-    } else {
-        console.warn('[SMWP Compare] refresh function not ready');
-    }
+    smwpRefreshAllCharts(SMWP_SELECTED_DATE);
 }
 
-// 버튼 OnClick에서 전역으로 접근 가능하게 노출
 window.smwpSetSearchDate = smwpSetSearchDate;
 window.smwpTodayText = smwpTodayText;
+window.smwpUserName = smwpUserName;
 window.smwpIsToday = smwpIsToday;
 window.smwpPlantName = smwpPlantName;
 window.SMWP_API_BASE_URL = SMWP_API_BASE_URL;
@@ -218,8 +221,6 @@ function smwpInitDateBoxRetry(retryCount) {
             console.error('[SMWP DateBox] not found:', SMWP_DATEBOX_ID);
             return;
         }
-
-        console.warn('[SMWP DateBox] not ready. retry:', retryCount);
 
         setTimeout(function () {
             smwpInitDateBoxRetry(retryCount + 1);
@@ -234,7 +235,7 @@ function smwpInitDateBoxRetry(retryCount) {
             parser: smwpDateParser
         });
     } catch (e) {
-        console.warn('[SMWP DateBox] datebox init failed:', e);
+        console.warn('[SMWP DateBox] init failed:', e);
     }
 
     var today = smwpTodayText();
