@@ -102,6 +102,8 @@ let alarmsRequestId = 0
 const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
+const PEAK_DASHBOARD_REFRESH_MS = 1000
+const PEAK_REFRESH_DELAY_MS = 150
 const PLANT_PEAK_THRESHOLD_KW = 8500
 const DEFAULT_PLANT_LOCATIONS = {
   1: { plantName: '기아 화성', latitude: 37.021559, longitude: 126.783111 },
@@ -337,7 +339,7 @@ const selectedPlantLiveEnergy = computed(() => {
       gasM3: sum.gasM3 + metricNumber(row, 'gasM3', 'gas_m3'),
       waterTon: sum.waterTon + metricNumber(row, 'waterTon', 'water_ton'),
       solarKwh: sum.solarKwh + metricNumber(row, 'solarKwh', 'solar_kwh'),
-      peakKw: metricNumber(latestRow, 'peakKw', 'peak_kw'),
+      peakKw: sum.peakKw + metricNumber(row, 'peakKw', 'peak_kw'),
     }),
     {
       plantId,
@@ -745,6 +747,15 @@ function formatDateTimeInput(date) {
   const minutes = String(date.getMinutes()).padStart(2, '0')
   const seconds = String(date.getSeconds()).padStart(2, '0')
   return `${formatDateInput(date)}T${hours}:${minutes}:${seconds}`
+}
+
+function formatHourBucketInput(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  date.setMinutes(0, 0, 0)
+  return formatDateTimeInput(date)
 }
 
 function endOfFacilityQueryDate() {
@@ -1367,7 +1378,33 @@ const peakMetrics = computed(() => {
     measuredAt: live.measuredAt,
   }
 })
-const peakTrend = computed(() => state.peakDashboard?.trend || [])
+const peakTrend = computed(() => {
+  const rows = [...(state.peakDashboard?.trend || [])]
+  const live = selectedPlantLiveEnergy.value
+  if (!live || selectedPeakPeriod.value !== 'DAY' || !selectedPeakDateIsToday.value) {
+    return rows
+  }
+
+  const measuredAt = formatHourBucketInput(live.measuredAt)
+  if (!measuredAt) {
+    return rows
+  }
+
+  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const index = rows.findIndex((point) => formatHourBucketInput(point.measuredAt || point.measured_at) === measuredAt)
+  const livePoint = {
+    ...(index >= 0 ? rows[index] : {}),
+    measuredAt,
+    averageKw: currentKw,
+    maxKw: Math.max(currentKw, Number(rows[index]?.maxKw || rows[index]?.max_kw || 0)),
+  }
+  if (index >= 0) {
+    rows[index] = livePoint
+  } else {
+    rows.push(livePoint)
+  }
+  return rows.sort((a, b) => Date.parse(a.measuredAt || a.measured_at || '') - Date.parse(b.measuredAt || b.measured_at || ''))
+})
 const peakRanking = computed(() => state.peakDashboard?.facilityRanking || [])
 const peakHistory = computed(() => state.peakDashboard?.history || [])
 const peakPlantComparison = computed(() => state.peakDashboard?.plantComparison || [])
@@ -3030,7 +3067,7 @@ async function refreshData() {
 }
 
 function schedulePeakRefresh() {
-  if (peakDashboardLoading.value || peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+  if (peakDashboardLoading.value || peakRefreshTimer || Date.now() - lastPeakRefreshAt < PEAK_DASHBOARD_REFRESH_MS) {
     return
   }
   window.clearTimeout(peakRefreshTimer)
@@ -3038,7 +3075,7 @@ function schedulePeakRefresh() {
     lastPeakRefreshAt = Date.now()
     peakRefreshTimer = null
     loadPeakDashboard({ silent: true }).catch(() => {})
-  }, 1000)
+  }, PEAK_REFRESH_DELAY_MS)
 }
 
 function scheduleUtilityRefresh() {

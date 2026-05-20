@@ -75,7 +75,7 @@ public class EnergyService {
 	private final AlarmMapper alarmMapper;
 
 	@Transactional
-	public void saveMeasurement(EnergyMeasurementMessage message) {
+	public EnergyMeasurement saveMeasurement(EnergyMeasurementMessage message) {
 		EnergyMeasurement measurement = new EnergyMeasurement();
 		measurement.setPlantId(message.getPlantId());
 		measurement.setFacilityId(message.getFacilityId());
@@ -96,6 +96,7 @@ public class EnergyService {
 
 		energyMapper.insertMeasurement(measurement);
 		createRealtimeAlarms(measurement, previousMeasurement);
+		return measurement;
 	}
 
 	@Transactional(readOnly = true)
