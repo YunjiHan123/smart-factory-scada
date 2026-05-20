@@ -1273,7 +1273,9 @@ const peakUsageRate = computed(() => {
   return peak ? Math.min(Math.round((peak / PLANT_PEAK_THRESHOLD_KW) * 100), 999) : 0
 })
 
-const alarmCount = computed(() => state.overview?.occurredAlarmCount ?? state.alarms.length)
+const alarmCount = computed(
+  () => state.overview?.occurredAlarmCount ?? state.alarms.filter((alarm) => (alarm.status || 'OCCURRED') === 'OCCURRED').length,
+)
 const alarmTypeLabels = {
   PEAK: '피크',
   ELECTRICITY: '전기',
@@ -1282,13 +1284,10 @@ const alarmTypeLabels = {
   FACILITY: '설비',
   ESG: 'ESG',
 }
-const occurredAlarms = computed(() =>
-  state.alarms.filter((alarm) => (alarm.status || 'OCCURRED') === 'OCCURRED'),
-)
 const alarmPlantGroups = computed(() => {
   const plants = new Map()
 
-  sortedAlarms(occurredAlarms.value).forEach((alarm) => {
+  sortedAlarms(state.alarms).forEach((alarm) => {
     const plantId = alarm.plantId ?? selectedPlantId.value ?? 'all'
     const plantName = alarm.plantName || selectedPlant.value?.name || `사업장 ${plantId}`
     const plantKey = String(plantId)
@@ -2189,7 +2188,7 @@ function statusLabel(status) {
     STOPPED: '정지',
     MAINTENANCE: '점검',
     OCCURRED: '발생',
-    RESOLVED: '처리',
+    RESOLVED: '완료',
   }
   return labels[status] || status || '-'
 }
@@ -2410,8 +2409,7 @@ async function loadAlarms(options = {}) {
   try {
     const alarms = await api.alarms({
       plantId: selectedPlantId.value || undefined,
-      status: 'OCCURRED',
-      limit: 100,
+      limit: 200,
     })
     if (requestId !== alarmsRequestId) {
       return
@@ -4920,10 +4918,30 @@ onUnmounted(() => {
                       <td>{{ alarm.message }}</td>
                       <td>{{ formatNumber(alarm.value) }}</td>
                       <td>{{ formatNumber(alarm.thresholdValue) }}</td>
-                      <td><span class="badge warn">{{ statusLabel(alarm.status) }}</span></td>
+                      <td>
+                        <span :class="['badge', alarm.status === 'RESOLVED' ? 'ok' : 'warn']">
+                          {{ statusLabel(alarm.status) }}
+                        </span>
+                      </td>
                       <td>
                         <div class="alarm-action-cell">
-                          <button class="light-button compact" type="button" @click="resolveAlarm(alarm.id)">처리</button>
+                          <button
+                            v-if="alarm.status !== 'RESOLVED'"
+                            class="light-button compact"
+                            type="button"
+                            @click="resolveAlarm(alarm.id)"
+                          >
+                            처리
+                          </button>
+                          <button
+                            v-else
+                            class="danger-button compact"
+                            type="button"
+                            title="완료 알람 삭제"
+                            @click="deleteAlarm(alarm.id)"
+                          >
+                            <Trash2 :size="14" /> 삭제
+                          </button>
                         </div>
                       </td>
                     </tr>
