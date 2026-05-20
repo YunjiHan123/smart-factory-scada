@@ -37,10 +37,17 @@ import com.smartfactory.scada.chatbot.dto.ChatbotMessageRequest;
 import com.smartfactory.scada.chatbot.dto.ChatbotMessageResponse;
 import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
+import com.smartfactory.scada.energy.domain.ElectricityBillDataStatus;
+import com.smartfactory.scada.energy.domain.ElectricityTariffCode;
 import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.EnergyType;
+import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.ElectricityBillComparisonResponse;
+import com.smartfactory.scada.energy.dto.ElectricityBillComparisonRowResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
+import com.smartfactory.scada.energy.service.ElectricityBillComparisonService;
 import com.smartfactory.scada.esg.domain.EsgGrade;
 import com.smartfactory.scada.esg.domain.EsgScore;
 import com.smartfactory.scada.esg.mapper.EsgMapper;
@@ -70,6 +77,9 @@ class ChatbotServiceTest {
 	@Mock
 	private OpenAiChatbotClient openAiChatbotClient;
 
+	@Mock
+	private ElectricityBillComparisonService electricityBillComparisonService;
+
 	private ChatbotService chatbotService;
 
 	@BeforeEach
@@ -81,7 +91,8 @@ class ChatbotServiceTest {
 			alarmMapper,
 			facilityMapper,
 			new ObjectMapper(),
-			openAiChatbotClient
+			openAiChatbotClient,
+			electricityBillComparisonService
 		);
 	}
 
@@ -127,6 +138,7 @@ class ChatbotServiceTest {
 		assertThat(savedMessage.getReferencedData()).contains("\"dailyEnergyTrend\"");
 		assertThat(savedMessage.getReferencedData()).contains("\"trendInsights\"");
 		assertThat(savedMessage.getReferencedData()).contains("\"facilityLineUsageSummary\"");
+		assertThat(savedMessage.getReferencedData()).contains("\"electricityBillComparison\"");
 		assertThat(response.answer()).isEqualTo("AI generated answer");
 	}
 
@@ -161,6 +173,39 @@ class ChatbotServiceTest {
 			"1200.00kWh",
 			"7.1%",
 			"1600.00kWh"
+		);
+	}
+
+	@Test
+	void askFallsBackToElectricityBillComparisonWhenOpenAiReturnsEmptyForBillQuestion() {
+		given(energyMapper.findLatestPlantSummary(1L)).willReturn(Optional.of(energySummary()));
+		given(esgMapper.findLatestByPlantId(1L)).willReturn(Optional.of(esgScore()));
+		stubOperationalContext(
+			1L,
+			List.of(),
+			0L,
+			List.of(facility(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.RUNNING))
+		);
+		given(electricityBillComparisonService.compare(1L, LocalDate.of(2026, 5, 18), PeakPowerPeriod.MONTH, null))
+			.willReturn(electricityBillComparison());
+		given(chatbotMapper.findRecent(100L, 1L, 5)).willReturn(List.of());
+		given(openAiChatbotClient.generateResponse(eq("전기요금 절감 가능해?"), anyString(), eq(List.of())))
+			.willReturn(Optional.empty());
+		stubInsertId();
+		given(chatbotMapper.findById(10L)).willReturn(Optional.empty());
+
+		ChatbotMessageResponse response = chatbotService.ask(
+			authenticatedUser(1L),
+			new ChatbotMessageRequest(1L, "전기요금 절감 가능해?")
+		);
+
+		assertThat(response.answer()).contains(
+			"고압A 선택II",
+			"고압C 선택I",
+			"834437원",
+			"172749원",
+			"1400.00kW",
+			"추정치"
 		);
 	}
 
@@ -297,6 +342,7 @@ class ChatbotServiceTest {
 				given(energyMapper.findFacilityLineUsages(
 					eq(plantId),
 					eq(facilityType),
+					eq(EnergyType.ELECTRICITY.name()),
 					any(LocalDate.class),
 					any(LocalDate.class),
 					any(LocalDate.class),
@@ -387,6 +433,47 @@ class ChatbotServiceTest {
 		return List.of(
 			lineUsage(101L, "Press Line 1", FacilityType.PRESS, FacilityStatus.WARNING, "1600.00"),
 			lineUsage(102L, "Press Line 2", FacilityType.PRESS, FacilityStatus.RUNNING, "1200.00")
+		);
+	}
+
+	private ElectricityBillComparisonResponse electricityBillComparison() {
+		return new ElectricityBillComparisonResponse(
+			1L,
+			LocalDate.of(2026, 5, 18),
+			PeakPowerPeriod.MONTH,
+			LocalDate.of(2026, 5, 1),
+			LocalDate.of(2026, 5, 31),
+			ElectricityTariffCode.HIGH_VOLTAGE_A_OPTION_II,
+			"고압A 선택II",
+			ElectricityTariffCode.HIGH_VOLTAGE_C_OPTION_I,
+			"고압C 선택I",
+			new BigDecimal("1400.00"),
+			LocalDateTime.of(2026, 5, 18, 10, 0),
+			new BigDecimal("834437"),
+			new BigDecimal("661688"),
+			new BigDecimal("172749"),
+			new BigDecimal("20.7"),
+			ElectricityBillDataStatus.OK,
+			"사용자 첨부 한전 산업용전력(을) 요금표 v1",
+			"kW",
+			"kWh",
+			"KRW",
+			List.of(
+				new ElectricityBillComparisonRowResponse(
+					ElectricityTariffCode.HIGH_VOLTAGE_C_OPTION_I,
+					"고압C 선택I",
+					new BigDecimal("6590"),
+					new BigDecimal("1400.00"),
+					new BigDecimal("659000"),
+					new BigDecimal("2688"),
+					new BigDecimal("661688"),
+					new BigDecimal("172749"),
+					new BigDecimal("20.7"),
+					1,
+					true
+				)
+			),
+			List.of("추정치")
 		);
 	}
 

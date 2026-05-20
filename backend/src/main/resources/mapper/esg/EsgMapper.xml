@@ -80,91 +80,42 @@
     </select>
 
     <select id="findEnvironmentAggregates" resultMap="EsgEnergyAggregateResultMap">
-        WITH filtered_measurements AS (
+        WITH usage_by_plant AS (
             SELECT
-                em.id,
-                em.plant_id,
-                em.facility_id,
-                em.measured_at,
-                em.electricity_kwh,
-                em.gas_m3,
-                em.water_ton,
-                em.solar_kwh,
-                em.peak_kw
-            FROM energy_measurements em
-            WHERE em.measured_at &gt;= #{from}
-              AND em.measured_at &lt; #{to}
-              <if test="plantId != null">AND em.plant_id = #{plantId}</if>
-        ),
-        usage_by_facility AS (
-            SELECT
-                plant_id,
-                facility_id,
+                es.plant_id,
                 COUNT(*) AS measurement_count,
-                MAX(measured_at) AS latest_measured_at,
-                GREATEST(COALESCE(MAX(electricity_kwh) - MIN(electricity_kwh), 0), 0) AS electricity_kwh,
-                GREATEST(COALESCE(MAX(gas_m3) - MIN(gas_m3), 0), 0) AS gas_m3,
-                GREATEST(COALESCE(MAX(water_ton) - MIN(water_ton), 0), 0) AS water_ton,
-                GREATEST(COALESCE(MAX(solar_kwh) - MIN(solar_kwh), 0), 0) AS solar_kwh,
-                COALESCE(MAX(peak_kw), 0) AS max_peak_kw
-            FROM filtered_measurements
-            GROUP BY plant_id, facility_id
-        ),
-        usage_by_plant AS (
-            SELECT
-                plant_id,
-                SUM(measurement_count) AS measurement_count,
-                MAX(latest_measured_at) AS latest_measured_at,
+                MAX(es.summary_at) AS latest_measured_at,
                 ROUND(COALESCE(SUM(electricity_kwh), 0), 2) AS electricity_kwh,
                 ROUND(COALESCE(SUM(gas_m3), 0), 2) AS gas_m3,
                 ROUND(COALESCE(SUM(water_ton), 0), 2) AS water_ton,
                 ROUND(COALESCE(SUM(solar_kwh), 0), 2) AS solar_kwh,
-                ROUND(COALESCE(MAX(max_peak_kw), 0), 2) AS max_peak_kw
-            FROM usage_by_facility
-            GROUP BY plant_id
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS max_peak_kw,
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS interval_max_peak_kw
+            FROM energy_summaries es
+            WHERE es.summary_type = 'DAILY'
+              AND es.facility_id IS NULL
+              AND es.summary_at &gt;= #{from}
+              AND es.summary_at &lt; #{to}
+              <if test="plantId != null">AND es.plant_id = #{plantId}</if>
+            GROUP BY es.plant_id
         ),
-        latest_measurements AS (
-            SELECT fm.*
-            FROM filtered_measurements fm
+        latest_summary AS (
+            SELECT es.plant_id, es.peak_kw AS current_peak_kw
+            FROM energy_summaries es
             JOIN (
-                SELECT plant_id, facility_id, MAX(measured_at) AS measured_at
-                FROM filtered_measurements
-                GROUP BY plant_id, facility_id
+                SELECT plant_id, MAX(summary_at) AS summary_at
+                FROM energy_summaries
+                WHERE summary_type = 'DAILY'
+                  AND facility_id IS NULL
+                  AND summary_at &gt;= #{from}
+                  AND summary_at &lt; #{to}
+                  <if test="plantId != null">AND plant_id = #{plantId}</if>
+                GROUP BY plant_id
             ) latest
-              ON latest.plant_id = fm.plant_id
-             AND latest.facility_id = fm.facility_id
-             AND latest.measured_at = fm.measured_at
-        ),
-        current_peak AS (
-            SELECT
-                plant_id,
-                ROUND(COALESCE(SUM(peak_kw), 0), 2) AS current_peak_kw
-            FROM latest_measurements
-            GROUP BY plant_id
-        ),
-        bucket_facility AS (
-            SELECT
-                plant_id,
-                facility_id,
-                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900) AS measured_bucket,
-                MAX(peak_kw) AS max_kw
-            FROM filtered_measurements
-            WHERE peak_kw IS NOT NULL
-            GROUP BY plant_id, facility_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(measured_at) / 900) * 900)
-        ),
-        bucket_plant AS (
-            SELECT
-                plant_id,
-                ROUND(COALESCE(MAX(bucket_peak_kw), 0), 2) AS interval_max_peak_kw
-            FROM (
-                SELECT
-                    plant_id,
-                    measured_bucket,
-                    SUM(max_kw) AS bucket_peak_kw
-                FROM bucket_facility
-                GROUP BY plant_id, measured_bucket
-            ) bucket_sum
-            GROUP BY plant_id
+              ON latest.plant_id = es.plant_id
+             AND latest.summary_at = es.summary_at
+            WHERE es.summary_type = 'DAILY'
+              AND es.facility_id IS NULL
         ),
         facility_counts AS (
             SELECT plant_id, COUNT(*) AS facility_count
@@ -183,14 +134,13 @@
             COALESCE(ubp.gas_m3, 0) AS gas_m3,
             COALESCE(ubp.water_ton, 0) AS water_ton,
             COALESCE(ubp.solar_kwh, 0) AS solar_kwh,
-            COALESCE(cp.current_peak_kw, 0) AS current_peak_kw,
+            COALESCE(ls.current_peak_kw, 0) AS current_peak_kw,
             COALESCE(ubp.max_peak_kw, 0) AS max_peak_kw,
-            COALESCE(bp.interval_max_peak_kw, 0) AS interval_max_peak_kw
+            COALESCE(ubp.interval_max_peak_kw, 0) AS interval_max_peak_kw
         FROM plants p
         LEFT JOIN facility_counts fc ON fc.plant_id = p.id
         LEFT JOIN usage_by_plant ubp ON ubp.plant_id = p.id
-        LEFT JOIN current_peak cp ON cp.plant_id = p.id
-        LEFT JOIN bucket_plant bp ON bp.plant_id = p.id
+        LEFT JOIN latest_summary ls ON ls.plant_id = p.id
         <where>
             <if test="plantId != null">AND p.id = #{plantId}</if>
         </where>

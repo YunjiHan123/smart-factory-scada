@@ -12,6 +12,8 @@ import com.smartfactory.scada.energy.domain.EnergyMeasurement;
 import com.smartfactory.scada.energy.domain.EnergySummary;
 import com.smartfactory.scada.energy.domain.SummaryType;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
+import com.smartfactory.scada.energy.dto.ElectricityBillingDemandPeak;
+import com.smartfactory.scada.energy.dto.ElectricityBillingUsageInterval;
 import com.smartfactory.scada.energy.dto.PeakPowerFacilityRanking;
 import com.smartfactory.scada.energy.dto.PeakPowerHistory;
 import com.smartfactory.scada.energy.dto.PeakPowerPlantComparison;
@@ -163,6 +165,18 @@ public interface EnergyMapper {
 	);
 
 	Optional<EnergyMeasurement> findLatestPlantMeasurement(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	Optional<ElectricityBillingDemandPeak> findElectricityBillingDemandPeak(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<ElectricityBillingUsageInterval> findElectricityBillingUsageIntervals(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to

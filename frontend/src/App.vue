@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { importLibrary, setOptions } from '@googlemaps/js-api-loader'
 import {
   Activity,
   AlertTriangle,
@@ -13,7 +14,9 @@ import {
   History,
   Leaf,
   ListOrdered,
+  LogOut,
   RadioReceiver,
+  ReceiptText,
   Search,
   Send,
   SunMedium,
@@ -22,11 +25,16 @@ import {
   Zap,
 } from 'lucide-vue-next'
 import { api, clearTokens, getAccessToken, saveTokens } from './api'
+import brandLogoUrl from './assets/6esgpulse-logo.png'
 
-const appMode = ref(getAccessToken() ? 'scada' : 'login')
-const SCADA_EXTERNAL_URL = 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
-const KAKAO_MAP_APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY
-const activePage = ref('facility')
+const appMode = ref(getAccessToken() ? 'detail' : 'login')
+const PLATFORM_NAME = '6ESGPulse'
+const PLATFORM_AI_NAME = '6ESGPulse AI'
+const PLATFORM_TAGLINE = '6개 사업장의 에너지와 ESG 상태를 하나로 읽는 통합 관제 플랫폼'
+const BRAND_MARK_URL = '/favicon.svg'
+const SCADA_EXTERNAL_URL = import.meta.env.VITE_SMWP_SCADA_URL || 'http://192.168.0.100:11005/?Pro=ksj_260430#%EC%98%88%EC%8B%9C1'
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+const activePage = ref('dashboard')
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedPlantId = ref(null)
@@ -39,45 +47,59 @@ const selectedDateTo = ref('')
 const selectedPeakDate = ref(formatDateInput(new Date()))
 const selectedPeakPeriod = ref('DAY')
 const activePeakView = ref('comparison')
+const peakDashboardLoading = ref(false)
+const peakBillError = ref('')
 const selectedUtilityDate = ref(formatDateInput(new Date()))
 const selectedUtilityPeriod = ref('DAY')
 const activeUtilityView = ref('comparison')
+const utilityDashboardLoading = ref(false)
 const utilityMeterSearch = ref('')
 const utilityTooltip = ref(null)
 const chatbotQuestion = ref('')
 const chatbotSending = ref(false)
 const chatbotDeletingId = ref(null)
 const userCreating = ref(false)
+const usersLoading = ref(false)
 const selectedEsgMonth = ref(formatMonthInput(new Date()))
 const selectedEsgFrom = ref(formatMonthStartInput(new Date()))
 const selectedEsgTo = ref(formatMonthEndInput(new Date()))
+const esgDashboardLoading = ref(false)
+const dashboardMapElement = ref(null)
+const dashboardMapState = reactive({
+  status: GOOGLE_MAPS_API_KEY ? 'idle' : 'missing-key',
+  message: GOOGLE_MAPS_API_KEY ? 'Loading map.' : 'Google Maps API key is missing.',
+})
 const esgMapElement = ref(null)
 const esgMapState = reactive({
-  status: KAKAO_MAP_APP_KEY ? 'idle' : 'missing-key',
-  message: KAKAO_MAP_APP_KEY ? '' : 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.',
+  status: GOOGLE_MAPS_API_KEY ? 'idle' : 'missing-key',
+  message: GOOGLE_MAPS_API_KEY ? 'Loading map.' : 'Google Maps API key is missing.',
 })
 const alarmSortOrder = ref('desc')
+const alarmsLoading = ref(false)
 const syncingSelection = ref(false)
 const realtimeNow = ref(Date.now())
 let energySocket = null
 let energySocketReconnectTimer = null
-let energyPollTimer = null
 let realtimeTickTimer = null
-let latestEnergyPollInFlight = false
-let latestEnergyPollRetryAt = 0
-let latestEnergyPollFailureCount = 0
 let peakRefreshTimer = null
 let utilityRefreshTimer = null
-let esgMapScriptPromise = null
-let esgKakaoMap = null
-let esgKakaoMarkers = []
-let esgKakaoOverlays = []
+let googleMapsConfigured = false
+let dashboardGoogleMap = null
+let dashboardGoogleMapContainer = null
+let dashboardGoogleOverlays = []
+let esgGoogleMap = null
+let esgGoogleMapContainer = null
+let esgGoogleOverlays = []
 let lastPeakRefreshAt = 0
 let lastUtilityRefreshAt = 0
 let lastAlarmRefreshAt = 0
+let peakDashboardRequestId = 0
+let utilityDashboardRequestId = 0
+let esgDashboardRequestId = 0
+let usersRequestId = 0
+let alarmsRequestId = 0
 const LIVE_SERIES_LIMIT = 120
 const LIVE_STALE_MS = 5000
-const LIVE_POLL_MS = 1000
 const LIVE_DASHBOARD_REFRESH_MS = 10000
 const PLANT_PEAK_THRESHOLD_KW = 8500
 const DEFAULT_PLANT_LOCATIONS = {
@@ -88,6 +110,39 @@ const DEFAULT_PLANT_LOCATIONS = {
   5: { plantName: '현대 아산', latitude: 36.838508, longitude: 126.881593 },
   6: { plantName: '현대 전주', latitude: 35.956543, longitude: 127.134506 },
 }
+const DASHBOARD_PLANT_LAYOUT = {
+  1: { side: 'left', card: { x: 4, y: 20 } },
+  2: { side: 'left', card: { x: 4, y: 44 } },
+  3: { side: 'left', card: { x: 4, y: 68 } },
+  4: { side: 'right', card: { x: 82, y: 24 } },
+  5: { side: 'right', card: { x: 82, y: 48 } },
+  6: { side: 'right', card: { x: 82, y: 72 } },
+}
+const DASHBOARD_CARD_WIDTH = 14
+const DASHBOARD_CARD_HEIGHT = 8.8
+const GOOGLE_MAP_STYLES = [
+  { featureType: 'administrative', elementType: 'labels.text.fill', stylers: [{ color: '#4b647f' }] },
+  { featureType: 'administrative.province', elementType: 'geometry.stroke', stylers: [{ color: '#b7c8dd' }] },
+  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#eef5f2' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#edf2f7' }] },
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#d6e1ec' }] },
+  { featureType: 'road', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#cfeff3' }] },
+]
+const GOOGLE_MAP_OPTIONS = {
+  styles: GOOGLE_MAP_STYLES,
+  disableDefaultUI: true,
+  zoomControl: true,
+  mapTypeControl: false,
+  streetViewControl: false,
+  fullscreenControl: true,
+  clickableIcons: false,
+  gestureHandling: 'greedy',
+}
+const MAP_CARD_LANE_OFFSETS = [-44, -22, 0, 22, 44]
 const liveEnergyByFacility = reactive(new Map())
 const liveEnergyBaselineByFacility = reactive(new Map())
 const liveEnergySeriesByFacility = reactive(new Map())
@@ -101,8 +156,8 @@ const nowLabel = computed(() =>
 )
 
 const loginForm = reactive({
-  email: 'admin@scada.com',
-  password: 'Password123!',
+  email: '',
+  password: '',
 })
 
 const userCreateForm = reactive({
@@ -123,6 +178,7 @@ const state = reactive({
   measurements: [],
   latestEnergy: null,
   peakDashboard: null,
+  peakBillEstimate: null,
   utilityDashboard: null,
   esgDashboard: null,
   facilityDetail: null,
@@ -131,6 +187,12 @@ const state = reactive({
   esgScores: [],
   users: [],
   chatbotMessages: [],
+})
+
+const solutionViewer = reactive({
+  open: false,
+  plant: null,
+  url: '',
 })
 
 const energyTypeOptions = [
@@ -145,6 +207,7 @@ const trendIconPath = 'M4 16l5-5 4 4 7-8M14 7h6v6'
 const storageIconPath = 'M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zM5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6'
 
 const navItems = [
+  { id: 'dashboard', label: '대시보드', icon: 'D' },
   { id: 'facility', label: '설비 조회', icon: 'F' },
   { id: 'peak', label: '피크 전력', icon: 'P' },
   { id: 'utility', label: '가스/용수', icon: 'U' },
@@ -154,7 +217,7 @@ const navItems = [
   { id: 'alarms', label: '알람', icon: 'A' },
 ]
 
-const validRoutes = ['facility', 'peak', 'utility', 'esg', 'chatbot', 'users', 'alarms']
+const validRoutes = ['dashboard', 'facility', 'peak', 'utility', 'esg', 'chatbot', 'users', 'alarms']
 const facilityLineOptions = [
   { value: 'PRESS', label: '프레스' },
   { value: 'BODY', label: '차체' },
@@ -206,6 +269,7 @@ const equipmentProcessNames = {
 
 const activeMeta = computed(() => {
   const meta = {
+    dashboard: ['대시보드', '사업장 환경 종합 현황도'],
     facility: ['설비별 에너지 현황', '사업장, 설비 라인, 조회일 기준의 전기 사용량을 확인합니다.'],
     peak: ['피크 전력 현황', '사업장별 피크 전력과 기준 초과 이력을 확인합니다.'],
     utility: ['가스/용수 모니터링', '가스와 용수 사용량을 시간대와 계측기 단위로 확인합니다.'],
@@ -223,6 +287,7 @@ const selectedPlant = computed(() =>
 )
 const chatbotMessagesChronological = computed(() => [...state.chatbotMessages].reverse())
 const chatbotSuggestedQuestions = [
+  '이번 달 전기요금 줄일 수 있는 요금제가 있어?',
   '오늘 전력 사용량과 ESG 상태를 요약해줘',
   '피크 전력 위험이 있는지 알려줘',
   '용수와 가스 사용량에서 확인할 점을 알려줘',
@@ -394,7 +459,7 @@ const facilityEquipmentCards = computed(() => {
       selectedEnergyMetricKeys.value.camel,
       selectedEnergyMetricKeys.value.snake,
     )
-    const displayUsage = baseUsage + Number(liveUsage || 0)
+    const displayUsage = baseUsage + Number(liveUsage || 0) + estimatedRealtimeUsage(facility, live)
     const monthlyAverage = Number(facility.monthlyAverageKwh || 0)
     return {
       ...facility,
@@ -517,17 +582,6 @@ function energyMetricKeys(energyType) {
     SOLAR: { camel: 'solarKwh', snake: 'solar_kwh' },
   }
   return values[energyType] || values.ELECTRICITY
-}
-
-function markLatestEnergyPollSuccess() {
-  latestEnergyPollFailureCount = 0
-  latestEnergyPollRetryAt = 0
-}
-
-function markLatestEnergyPollFailure() {
-  latestEnergyPollFailureCount += 1
-  const retryDelay = Math.min(15000, 2000 * latestEnergyPollFailureCount)
-  latestEnergyPollRetryAt = Date.now() + retryDelay
 }
 
 function allLineFacilityIds(plantId = selectedPlantId.value) {
@@ -823,54 +877,52 @@ function plantIdentifier(plant) {
   return Number.isFinite(number) ? number : null
 }
 
-function loadKakaoMapsScript() {
-  if (!KAKAO_MAP_APP_KEY) {
-    return Promise.reject(new Error('Kakao Maps API key is missing.'))
+async function loadGoogleMapsLibrary() {
+  if (!GOOGLE_MAPS_API_KEY) {
+    throw new Error('Google Maps API key is missing.')
   }
 
-  if (window.kakao?.maps) {
-    return new Promise((resolve) => window.kakao.maps.load(resolve))
-  }
-
-  if (!esgMapScriptPromise) {
-    esgMapScriptPromise = new Promise((resolve, reject) => {
-      const existingScript = document.getElementById('kakao-maps-sdk')
-      if (existingScript) {
-        existingScript.addEventListener('load', () => {
-          if (window.kakao?.maps) {
-            window.kakao.maps.load(resolve)
-          } else {
-            reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
-          }
-        }, { once: true })
-        existingScript.addEventListener('error', reject, { once: true })
-        return
-      }
-
-      const script = document.createElement('script')
-      script.id = 'kakao-maps-sdk'
-      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_MAP_APP_KEY}&autoload=false`
-      script.async = true
-      script.onload = () => {
-        if (window.kakao?.maps) {
-          window.kakao.maps.load(resolve)
-        } else {
-          reject(new Error('Kakao Maps SDK was loaded, but kakao.maps is unavailable.'))
-        }
-      }
-      script.onerror = () => reject(new Error('Kakao Maps SDK could not be loaded.'))
-      document.head.appendChild(script)
+  if (!googleMapsConfigured) {
+    setOptions({
+      key: GOOGLE_MAPS_API_KEY,
+      v: 'weekly',
+      language: 'ko',
+      region: 'KR',
     })
+    googleMapsConfigured = true
   }
 
-  return esgMapScriptPromise
+  const [mapsLibrary, coreLibrary] = await Promise.all([
+    importLibrary('maps'),
+    importLibrary('core'),
+  ])
+
+  return {
+    ...mapsLibrary,
+    ...coreLibrary,
+  }
+}
+
+function clearDashboardMapMarkers() {
+  dashboardGoogleOverlays.forEach((overlay) => overlay.setMap(null))
+  dashboardGoogleOverlays = []
+}
+
+function resetDashboardGoogleMap() {
+  clearDashboardMapMarkers()
+  dashboardGoogleMap = null
+  dashboardGoogleMapContainer = null
 }
 
 function clearEsgMapMarkers() {
-  esgKakaoMarkers.forEach(({ marker }) => marker.setMap(null))
-  esgKakaoOverlays.forEach((overlay) => overlay.setMap(null))
-  esgKakaoMarkers = []
-  esgKakaoOverlays = []
+  esgGoogleOverlays.forEach((overlay) => overlay.setMap(null))
+  esgGoogleOverlays = []
+}
+
+function resetEsgGoogleMap() {
+  clearEsgMapMarkers()
+  esgGoogleMap = null
+  esgGoogleMapContainer = null
 }
 
 function escapeHtml(value) {
@@ -882,17 +934,218 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;')
 }
 
-function esgMapOverlayContent(plant) {
-  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+function mapCardLaneOffset(index) {
+  return MAP_CARD_LANE_OFFSETS[index % MAP_CARD_LANE_OFFSETS.length]
+}
+
+function mapOverlaySide(plant, fallbackCenterLng = 127.9) {
+  if (plant?.side === 'left' || plant?.side === 'right') {
+    return plant.side
+  }
+  return Number(plant?.longitude) < fallbackCenterLng ? 'left' : 'right'
+}
+
+function createGoogleMapOverlay(maps, map, position, content, options = {}) {
+  const { zIndex = 1, laneOffset = 0, side = null } = options
+  const resolvedSide = side || 'right'
+  const connectorX = resolvedSide === 'left' ? -46 : 46
+  const connectorAngle = Math.atan2(laneOffset, connectorX) * 180 / Math.PI
+  const connectorWidth = Math.hypot(connectorX, laneOffset)
+
+  class PlantOverlay extends maps.OverlayView {
+    constructor() {
+      super()
+      this.position = new maps.LatLng(position.lat, position.lng)
+      this.element = content
+    }
+
+    onAdd() {
+      const panes = this.getPanes()
+      this.element.style.position = 'absolute'
+      this.element.style.zIndex = String(zIndex)
+      this.element.style.setProperty('--card-y', `${laneOffset}px`)
+      this.element.style.setProperty('--connector-angle', `${connectorAngle}deg`)
+      this.element.style.setProperty('--connector-width', `${connectorWidth}px`)
+      panes.overlayMouseTarget.appendChild(this.element)
+    }
+
+    draw() {
+      const point = this.getProjection()?.fromLatLngToDivPixel(this.position)
+      if (!point) {
+        return
+      }
+      this.element.classList.toggle('left', resolvedSide === 'left')
+      this.element.classList.toggle('right', resolvedSide !== 'left')
+      this.element.style.left = `${point.x}px`
+      this.element.style.top = `${point.y}px`
+      this.element.style.transform = 'translate(-50%, -50%)'
+    }
+
+    onRemove() {
+      this.element.remove()
+    }
+  }
+
+  const overlay = new PlantOverlay()
+  overlay.setMap(map)
+  return overlay
+}
+
+function htmlToElement(html) {
+  const wrapper = document.createElement('div')
+  wrapper.innerHTML = html.trim()
+  return wrapper.firstElementChild
+}
+
+function mapCenterLongitude(plants, fallback = 127.9) {
+  const longitudes = plants
+    .map((plant) => Number(plant.longitude))
+    .filter(Number.isFinite)
+  if (!longitudes.length) {
+    return fallback
+  }
+  return (Math.min(...longitudes) + Math.max(...longitudes)) / 2
+}
+
+function fitGoogleMapToPlants(map, maps, plants, fallbackZoom = 7) {
+  if (!plants.length) {
+    return
+  }
+
+  if (plants.length === 1) {
+    map.setCenter({
+      lat: Number(plants[0].latitude),
+      lng: Number(plants[0].longitude),
+    })
+    map.setZoom(fallbackZoom)
+    return
+  }
+
+  const bounds = new maps.LatLngBounds()
+  plants.forEach((plant) => {
+    bounds.extend({
+      lat: Number(plant.latitude),
+      lng: Number(plant.longitude),
+    })
+  })
+  map.fitBounds(bounds, {
+    top: 56,
+    right: 56,
+    bottom: 56,
+    left: 56,
+  })
+}
+
+function dashboardMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedPlantId.value)
+  const gradeClass = esgGradeClass(plant.grade)
   return `
-    <div class="esg-map-label${active ? ' active' : ''}">
-      <strong class="${esgGradeClass(plant.grade)}">${escapeHtml(plant.grade || '-')}</strong>
-      <span>${escapeHtml(plant.plantName || '-')}</span>
-    </div>
+    <button type="button" class="google-plant-marker dashboard ${active ? 'active' : ''}">
+      <span class="google-plant-pin ${gradeClass}"></span>
+      <span class="google-plant-card">
+        <b>${escapeHtml(plant.plantName || '-')}</b>
+        <strong class="${gradeClass}">${escapeHtml(plant.grade || '-')}</strong>
+        <em>${escapeHtml(formatNumber(plant.totalScore))} pt</em>
+      </span>
+    </button>
   `
 }
 
-async function renderEsgKakaoMap() {
+function esgMapOverlayContent(plant) {
+  const active = Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId)
+  const gradeClass = esgGradeClass(plant.grade)
+  return `
+    <button type="button" class="google-plant-marker esg ${active ? 'active' : ''}">
+      <span class="google-plant-pin ${gradeClass}"></span>
+      <span class="google-plant-card esg-map-label">
+        <strong class="${gradeClass}">${escapeHtml(plant.grade || '-')}</strong>
+        <span>${escapeHtml(plant.plantName || '-')}</span>
+      </span>
+    </button>
+  `
+}
+
+async function renderDashboardGoogleMap() {
+  if (activePage.value !== 'dashboard') {
+    return
+  }
+
+  await nextTick()
+  const plants = dashboardPlants.value
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    dashboardMapState.status = 'missing-key'
+    dashboardMapState.message = 'Google Maps API key is missing.'
+    return
+  }
+
+  const container = dashboardMapElement.value
+  if (!container) {
+    return
+  }
+
+  if (!plants.length) {
+    dashboardMapState.status = 'empty'
+    dashboardMapState.message = 'No plant coordinates were found.'
+    clearDashboardMapMarkers()
+    return
+  }
+
+  dashboardMapState.status = 'loading'
+    dashboardMapState.message = 'Loading map.'
+
+  try {
+    const maps = await loadGoogleMapsLibrary()
+    if (dashboardGoogleMapContainer !== container) {
+      clearDashboardMapMarkers()
+      dashboardGoogleMap = null
+      dashboardGoogleMapContainer = container
+    }
+
+    if (!dashboardGoogleMap) {
+      dashboardGoogleMap = new maps.Map(container, {
+        ...GOOGLE_MAP_OPTIONS,
+        center: { lat: 36.4, lng: 127.9 },
+        zoom: plants.length > 1 ? 7 : 10,
+      })
+    } else {
+      dashboardGoogleMap.setOptions({
+        ...GOOGLE_MAP_OPTIONS,
+        restriction: null,
+      })
+      dashboardGoogleMap.setCenter({ lat: 36.4, lng: 127.9 })
+    }
+
+    clearDashboardMapMarkers()
+    plants.forEach((plant, index) => {
+      const markerElement = htmlToElement(dashboardMapOverlayContent(plant))
+      markerElement.addEventListener('click', () => openPlantSolution(plant))
+      const overlay = createGoogleMapOverlay(
+        maps,
+        dashboardGoogleMap,
+        { lat: Number(plant.latitude), lng: Number(plant.longitude) },
+        markerElement,
+        {
+          zIndex: Number(plant.plantId) === Number(selectedPlantId.value) ? 4 : 2,
+          laneOffset: mapCardLaneOffset(index),
+          side: mapOverlaySide(plant),
+        },
+      )
+      dashboardGoogleOverlays.push(overlay)
+    })
+
+    fitGoogleMapToPlants(dashboardGoogleMap, maps, plants, plants.length > 1 ? 7 : 10)
+    dashboardMapState.status = 'ready'
+    dashboardMapState.message = ''
+  } catch (error) {
+    console.error(error)
+    clearDashboardMapMarkers()
+    dashboardMapState.status = 'error'
+    dashboardMapState.message = 'Google Maps could not be loaded.'
+  }
+}
+
+async function renderEsgGoogleMap() {
   if (activePage.value !== 'esg') {
     return
   }
@@ -900,9 +1153,9 @@ async function renderEsgKakaoMap() {
   await nextTick()
   const plants = esgMapPlants.value
 
-  if (!KAKAO_MAP_APP_KEY) {
+  if (!GOOGLE_MAPS_API_KEY) {
     esgMapState.status = 'missing-key'
-    esgMapState.message = 'Kakao 지도 API 키를 설정하면 지도가 표시됩니다.'
+    esgMapState.message = 'Google Maps API key is missing.'
     return
   }
 
@@ -913,70 +1166,64 @@ async function renderEsgKakaoMap() {
 
   if (!plants.length) {
     esgMapState.status = 'empty'
-    esgMapState.message = '좌표가 있는 사업장 데이터가 없습니다.'
+    esgMapState.message = 'No plant coordinates were found.'
     clearEsgMapMarkers()
     return
   }
 
   esgMapState.status = 'loading'
-  esgMapState.message = '지도를 불러오는 중입니다.'
+    esgMapState.message = 'Loading map.'
 
   try {
-    await loadKakaoMapsScript()
-    const maps = window.kakao.maps
-    const center = new maps.LatLng(36.4, 127.9)
+    const maps = await loadGoogleMapsLibrary()
+    const center = { lat: 36.4, lng: 127.9 }
 
-    if (!esgKakaoMap) {
-      esgKakaoMap = new maps.Map(container, {
+    if (esgGoogleMapContainer !== container) {
+      clearEsgMapMarkers()
+      esgGoogleMap = null
+      esgGoogleMapContainer = container
+    }
+
+    if (!esgGoogleMap) {
+      esgGoogleMap = new maps.Map(container, {
+        ...GOOGLE_MAP_OPTIONS,
         center,
-        level: plants.length > 1 ? 12 : 8,
+        zoom: plants.length > 1 ? 7 : 10,
       })
     } else {
-      esgKakaoMap.setCenter(center)
+      esgGoogleMap.setOptions(GOOGLE_MAP_OPTIONS)
+      esgGoogleMap.setCenter(center)
     }
 
     clearEsgMapMarkers()
-    const bounds = new maps.LatLngBounds()
-
-    plants.forEach((plant) => {
-      const position = new maps.LatLng(Number(plant.latitude), Number(plant.longitude))
-      bounds.extend(position)
-      const marker = new maps.Marker({
-        map: esgKakaoMap,
-        position,
-        title: plant.plantName,
-      })
-
-      maps.event.addListener(marker, 'click', () => {
+    const centerLongitude = mapCenterLongitude(plants)
+    plants.forEach((plant, index) => {
+      const markerElement = htmlToElement(esgMapOverlayContent(plant))
+      markerElement.addEventListener('click', () => {
         selectedPlantId.value = plant.plantId
       })
-
-      const overlay = new maps.CustomOverlay({
-        content: esgMapOverlayContent(plant),
-        position,
-        xAnchor: 0.5,
-        yAnchor: 2.45,
-        zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
-      })
-      overlay.setMap(esgKakaoMap)
-
-      esgKakaoMarkers.push({ marker, plant })
-      esgKakaoOverlays.push(overlay)
+      const overlay = createGoogleMapOverlay(
+        maps,
+        esgGoogleMap,
+        { lat: Number(plant.latitude), lng: Number(plant.longitude) },
+        markerElement,
+        {
+          zIndex: Number(plant.plantId) === Number(selectedEsgPlant.value?.plantId) ? 4 : 2,
+          laneOffset: mapCardLaneOffset(index),
+          side: mapOverlaySide(plant, centerLongitude),
+        },
+      )
+      esgGoogleOverlays.push(overlay)
     })
 
-    if (plants.length > 1) {
-      esgKakaoMap.setBounds(bounds, 28, 28, 28, 28)
-    } else {
-      esgKakaoMap.setLevel(8)
-    }
-
+    fitGoogleMapToPlants(esgGoogleMap, maps, plants, plants.length > 1 ? 7 : 10)
     esgMapState.status = 'ready'
     esgMapState.message = ''
   } catch (error) {
     console.error(error)
     clearEsgMapMarkers()
     esgMapState.status = 'error'
-    esgMapState.message = '지도를 불러오지 못했습니다. API 키와 도메인 설정을 확인해 주세요.'
+    esgMapState.message = 'Google Maps could not be loaded.'
   }
 }
 
@@ -1199,6 +1446,49 @@ const peakHistoryRows = computed(() =>
     thresholdKw: row.thresholdKw || row.threshold_kw,
   })).filter((row) => Number(row.peakUsageRate || 0) > 100),
 )
+const peakBillSummary = computed(() => {
+  const bill = state.peakBillEstimate
+  if (!bill) {
+    return {
+      hasEstimate: false,
+      tariffName: '-',
+      periodRangeLabel: peakPeriodRangeLabel.value,
+      assumptions: [],
+    }
+  }
+
+  const periodFrom = bill.periodFrom || bill.period_from || selectedPeakDate.value
+  const periodTo = bill.periodTo || bill.period_to || selectedPeakDate.value
+  const periodRangeLabel = periodFrom === periodTo ? formatDate(periodFrom) : `${formatDate(periodFrom)} - ${formatDate(periodTo)}`
+
+  return {
+    hasEstimate: true,
+    tariffName: bill.tariffName || bill.tariff_name || '-',
+    source: bill.source || '',
+    periodRangeLabel,
+    billingDemandKw: Number(bill.billingDemandKw || bill.billing_demand_kw || 0),
+    billingPeakMeasuredAt: bill.billingPeakMeasuredAt || bill.billing_peak_measured_at || null,
+    basicRateKrwPerKw: Number(bill.basicRateKrwPerKw || bill.basic_rate_krw_per_kw || 0),
+    basicChargeKrw: Number(bill.basicChargeKrw || bill.basic_charge_krw || 0),
+    energyChargeKrw: Number(bill.energyChargeKrw || bill.energy_charge_krw || 0),
+    estimatedTotalKrw: Number(bill.estimatedTotalKrw || bill.estimated_total_krw || 0),
+    demandUnit: bill.demandUnit || bill.demand_unit || 'kW',
+    usageUnit: bill.usageUnit || bill.usage_unit || 'kWh',
+    currencyUnit: bill.currencyUnit || bill.currency_unit || 'KRW',
+    assumptions: bill.assumptions || [],
+  }
+})
+const peakBillBreakdownRows = computed(() => {
+  const breakdown = state.peakBillEstimate?.usageBreakdown || state.peakBillEstimate?.usage_breakdown || []
+  return breakdown.map((row, index) => ({
+    id: `${row.season || row.season_name || index}-${row.loadPeriod || row.load_period || index}`,
+    seasonName: row.seasonName || row.season_name || row.season || '-',
+    loadPeriodName: row.loadPeriodName || row.load_period_name || row.loadPeriod || row.load_period || '-',
+    usageKwh: Number(row.usageKwh || row.usage_kwh || 0),
+    rateKrwPerKwh: Number(row.rateKrwPerKwh || row.rate_krw_per_kwh || 0),
+    chargeKrw: Number(row.chargeKrw || row.charge_krw || 0),
+  }))
+})
 const utilityMetrics = computed(() => {
   const metrics = state.utilityDashboard?.metrics || {}
   if (!selectedUtilityDateIsToday.value || selectedUtilityPeriod.value !== 'DAY') {
@@ -1476,6 +1766,72 @@ const esgSchematicMap = computed(() => {
   })
 })
 
+const dashboardPlants = computed(() => {
+  const plantsById = new Map()
+  const defaultLocations = Object.entries(DEFAULT_PLANT_LOCATIONS).map(([plantId, location]) => ({
+    id: Number(plantId),
+    name: location.plantName,
+    ...location,
+  }))
+
+  defaultLocations.forEach((plant) => plantsById.set(Number(plant.id), plant))
+  state.plants.forEach((plant) => {
+    const plantId = plantIdentifier(plant)
+    if (!plantId) {
+      return
+    }
+    plantsById.set(plantId, {
+      ...plantsById.get(plantId),
+      ...plant,
+      id: plantId,
+      name: plant.name || plant.plantName || plantsById.get(plantId)?.plantName,
+    })
+  })
+
+  const scoreByPlantId = new Map([
+    ...state.esgScores.map((score) => [plantIdentifier(score), score]),
+    ...esgPlants.value.map((plant) => [plantIdentifier(plant), plant]),
+  ].filter(([plantId]) => plantId != null))
+
+  const splitIndex = Math.ceil(plantsById.size / 2)
+
+  return Array.from(plantsById.values())
+    .map((plant) => {
+      const plantId = plantIdentifier(plant)
+      const location = DEFAULT_PLANT_LOCATIONS[plantId] || plant
+      const score = scoreByPlantId.get(plantId) || {}
+      const longitude = Number(plant.longitude ?? plant.lng ?? location.longitude)
+      const latitude = Number(plant.latitude ?? plant.lat ?? location.latitude)
+      return {
+        ...plant,
+        plantId,
+        plantName: plant.plantName || plant.name || location.plantName || `사업장 ${plantId}`,
+        latitude,
+        longitude,
+        grade: score.grade || plant.grade || (plantId <= 3 ? 'AA' : 'BBB'),
+        totalScore: score.totalScore ?? score.total_score ?? plant.totalScore ?? (plantId <= 3 ? 8.02 : 5.48),
+      }
+    })
+    .filter((plant) => plant.plantId && Number.isFinite(plant.latitude) && Number.isFinite(plant.longitude))
+    .sort((left, right) => left.plantId - right.plantId)
+    .map((plant, index) => {
+      const layout = DASHBOARD_PLANT_LAYOUT[plant.plantId]
+      const side = layout?.side || (index < splitIndex ? 'left' : 'right')
+      const slot = layout?.card || {
+        x: side === 'left' ? 4 : 80,
+        y: 18 + (index % 3) * 24,
+      }
+      const pin = projectDashboardPlant(plant.longitude, plant.latitude)
+      return {
+        ...plant,
+        side,
+        pin,
+        card: slot,
+        connectorPath: connectorPath(slot, pin, side),
+      }
+    })
+})
+
 function esgGradeClass(grade) {
   if (['AAA', 'AA', 'A'].includes(grade)) {
     return 'good'
@@ -1561,34 +1917,55 @@ const esgCompareRows = computed(() =>
     scores: [plant.carbonScore, plant.waterScore, plant.solarScore, plant.peakScore].map((score) => Number(score || 0)),
   })),
 )
-function buildScadaExternalUrl(userName) {
-  const url = new URL(SCADA_EXTERNAL_URL)
-  if (userName) {
-    url.searchParams.set('userName', userName)
+function projectDashboardPlant(longitude, latitude) {
+  const minLng = 125.6
+  const maxLng = 129.8
+  const minLat = 34.6
+  const maxLat = 38.1
+  const x = 34 + ((longitude - minLng) / (maxLng - minLng)) * 34
+  const y = 20 + ((maxLat - latitude) / (maxLat - minLat)) * 60
+  return {
+    x: Math.max(34, Math.min(70, x)),
+    y: Math.max(16, Math.min(82, y)),
+  }
+}
+
+function connectorPath(card, pin, side) {
+  const startX = side === 'left' ? card.x + DASHBOARD_CARD_WIDTH : card.x
+  const startY = card.y + DASHBOARD_CARD_HEIGHT / 2
+  const controlX = side === 'left' ? startX + 14 : startX - 14
+  const pinLeadX = side === 'left' ? pin.x - 5 : pin.x + 5
+  return `M ${startX} ${startY} C ${controlX} ${startY}, ${pinLeadX} ${pin.y}, ${pin.x} ${pin.y}`
+}
+
+function buildScadaExternalUrl(plant) {
+  const url = new URL(SCADA_EXTERNAL_URL, window.location.origin)
+  const plantId = plantIdentifier(plant)
+  if (plantId) {
+    url.searchParams.set('plantId', plantId)
+  }
+  if (plant?.plantName || plant?.name) {
+    url.searchParams.set('plantName', plant.plantName || plant.name)
+  }
+  if (state.me?.name) {
+    url.searchParams.set('userName', state.me.name)
   }
   return url.toString()
 }
 
-async function redirectToScada() {
-  let userName = state.me?.name
+function openPlantSolution(plant) {
+  solutionViewer.plant = plant
+  solutionViewer.url = buildScadaExternalUrl(plant)
+  solutionViewer.open = true
+}
 
-  if (!userName && getAccessToken()) {
-    try {
-      const me = await api.me()
-      state.me = me
-      userName = me.name
-    } catch {
-      userName = ''
-    }
-  }
-
-  window.location.href = buildScadaExternalUrl(userName)
+function closePlantSolution() {
+  solutionViewer.open = false
 }
 
 function routeTo(hash) {
   if (hash === '/scada') {
-    redirectToScada()
-    return
+    hash = '/detail/dashboard'
   }
   if (window.location.hash === `#${hash}`) {
     applyRoute()
@@ -1598,7 +1975,7 @@ function routeTo(hash) {
 }
 
 function applyRoute() {
-  const route = window.location.hash.replace(/^#/, '') || (getAccessToken() ? '/scada' : '/login')
+  const route = window.location.hash.replace(/^#/, '') || (getAccessToken() ? '/detail/dashboard' : '/login')
 
   if (route === '/login') {
     appMode.value = 'login'
@@ -1611,7 +1988,7 @@ function applyRoute() {
   }
 
   if (route === '/scada') {
-    redirectToScada()
+    routeTo('/detail/dashboard')
     return
   }
 
@@ -1622,7 +1999,7 @@ function applyRoute() {
     return
   }
 
-  routeTo(getAccessToken() ? '/scada' : '/login')
+  routeTo(getAccessToken() ? '/detail/dashboard' : '/login')
 }
 
 function formatNumber(value, digits = 1) {
@@ -1632,6 +2009,11 @@ function formatNumber(value, digits = 1) {
   return Number(value).toLocaleString('ko-KR', {
     maximumFractionDigits: digits,
   })
+}
+
+function formatMoney(value) {
+  const formatted = formatNumber(value, 0)
+  return formatted === '-' ? '-' : `${formatted}원`
 }
 
 function alarmKeyword(alarm) {
@@ -1843,8 +2225,7 @@ async function submitUserCreate() {
         })
       }
       resetUserCreateForm()
-      const users = await api.users({ page: 0, size: 20 })
-      state.users = users.items || []
+      await loadUsers({ silent: true })
     })
   } finally {
     userCreating.value = false
@@ -1863,11 +2244,10 @@ async function run(task) {
       error.status === 403 ||
       error.message.includes('인증') ||
       error.message.includes('Unauthorized')
-    ) {
-      stopEnergyWebSocket()
-      stopEnergyPolling()
-      clearTokens()
-      routeTo('/login')
+      ) {
+        stopEnergyWebSocket()
+        clearTokens()
+        routeTo('/login')
     }
   } finally {
     loading.value = false
@@ -1879,7 +2259,7 @@ async function login() {
     const response = await api.login(loginForm)
     saveTokens(response)
     state.me = response
-    routeTo('/scada')
+    routeTo('/detail/dashboard')
     await loadInitial()
   })
 }
@@ -1890,7 +2270,6 @@ async function logout() {
       await api.logout()
     } finally {
       stopEnergyWebSocket()
-      stopEnergyPolling()
       clearTokens()
       routeTo('/login')
     }
@@ -1913,6 +2292,7 @@ async function loadInitial() {
     syncingSelection.value = true
     selectedPlantId.value = me.role === 'ADMIN' ? fallbackPlantId : userPlant?.id ?? fallbackPlantId
     syncingSelection.value = false
+    startEnergyWebSocket()
 
     if (!selectedPlantId.value) {
       state.facilities = []
@@ -1922,6 +2302,8 @@ async function loadInitial() {
       state.facilityDetail = null
       return
     }
+
+    state.facilities = await api.facilities(selectedPlantId.value).catch(() => [])
 
     if (appMode.value === 'detail' && activePage.value !== 'facility') {
       await loadActivePageData()
@@ -1959,6 +2341,11 @@ async function loadActivePageData() {
     return
   }
 
+  if (activePage.value === 'dashboard') {
+    await loadDashboardData()
+    return
+  }
+
   if (appMode.value === 'scada') {
     await loadOverviewEnergyData()
     return
@@ -1990,8 +2377,7 @@ async function loadActivePageData() {
   }
 
   if (activePage.value === 'users') {
-    const users = await api.users({ page: 0, size: 20 })
-    state.users = users.items || []
+    await loadUsers()
     return
   }
 
@@ -2000,12 +2386,42 @@ async function loadActivePageData() {
   }
 }
 
-async function loadAlarms() {
-  state.alarms = await api.alarms({
-    plantId: selectedPlantId.value || undefined,
-    status: 'OCCURRED',
-    limit: 100,
-  })
+async function loadDashboardData() {
+  const [overview, esgScores] = await Promise.all([
+    selectedPlantId.value ? api.dashboard(selectedPlantId.value).catch(() => null) : Promise.resolve(null),
+    api.esgScores({
+      from: selectedEsgFrom.value,
+      to: selectedEsgTo.value,
+    }).catch(() => []),
+  ])
+
+  state.overview = overview
+  state.esgScores = esgScores
+}
+
+async function loadAlarms(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++alarmsRequestId
+
+  if (!silent) {
+    alarmsLoading.value = true
+  }
+
+  try {
+    const alarms = await api.alarms({
+      plantId: selectedPlantId.value || undefined,
+      status: 'OCCURRED',
+      limit: 100,
+    })
+    if (requestId !== alarmsRequestId) {
+      return
+    }
+    state.alarms = alarms
+  } finally {
+    if (!silent && requestId === alarmsRequestId) {
+      alarmsLoading.value = false
+    }
+  }
 }
 
 async function loadChatbotMessages() {
@@ -2018,6 +2434,27 @@ async function loadChatbotMessages() {
     plantId: selectedPlantId.value,
     limit: 20,
   })
+}
+
+async function loadUsers(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++usersRequestId
+
+  if (!silent) {
+    usersLoading.value = true
+  }
+
+  try {
+    const users = await api.users({ page: 0, size: 20 })
+    if (requestId !== usersRequestId) {
+      return
+    }
+    state.users = users.items || []
+  } finally {
+    if (!silent && requestId === usersRequestId) {
+      usersLoading.value = false
+    }
+  }
 }
 
 async function submitChatbotQuestion() {
@@ -2241,7 +2678,6 @@ async function loadEnergyData() {
   }
   await loadFacilityDetail()
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function preloadPlantLiveEnergy(dateValue = formatDateInput(new Date()), toValue = formatDateTimeInput(new Date())) {
@@ -2312,7 +2748,6 @@ async function loadOverviewEnergyData() {
   state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
   applySummaryDateRange(summaries)
   startEnergyWebSocket()
-  startEnergyPolling()
 }
 
 async function loadFacilityDetail() {
@@ -2329,117 +2764,117 @@ async function loadFacilityDetail() {
   })
 }
 
-async function loadPeakDashboard() {
+async function loadPeakDashboard(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++peakDashboardRequestId
+
   if (!selectedPlantId.value) {
     state.peakDashboard = null
+    state.peakBillEstimate = null
+    peakBillError.value = ''
+    if (!silent && requestId === peakDashboardRequestId) {
+      peakDashboardLoading.value = false
+    }
     return
   }
 
-  state.peakDashboard = await api.peakDashboard({
-    plantId: selectedPlantId.value,
-    date: selectedPeakDate.value || undefined,
-    period: selectedPeakPeriod.value,
-  })
-  if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
-    await preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date()))
+  if (!silent) {
+    peakDashboardLoading.value = true
   }
-  startEnergyWebSocket()
-  startEnergyPolling()
+
+  try {
+    const params = {
+      plantId: selectedPlantId.value,
+      date: selectedPeakDate.value || undefined,
+      period: selectedPeakPeriod.value,
+    }
+    const billEstimateRequest = api.electricityBillEstimate(params)
+      .then((billEstimate) => ({ billEstimate, error: '' }))
+      .catch(() => ({ billEstimate: null, error: '요금 추정 정보를 불러오지 못했습니다.' }))
+    const [dashboard, billResult] = await Promise.all([
+      api.peakDashboard(params),
+      billEstimateRequest,
+    ])
+    if (requestId !== peakDashboardRequestId) {
+      return
+    }
+    state.peakDashboard = dashboard
+    state.peakBillEstimate = billResult.billEstimate
+    peakBillError.value = billResult.error
+    if (selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value) {
+      preloadPlantLiveEnergy(selectedPeakDate.value, formatDateTimeInput(new Date())).catch(() => {})
+    }
+    startEnergyWebSocket()
+  } finally {
+    if (!silent && requestId === peakDashboardRequestId) {
+      peakDashboardLoading.value = false
+    }
+  }
 }
 
-async function loadUtilityDashboard() {
+async function loadUtilityDashboard(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++utilityDashboardRequestId
+
   if (!selectedPlantId.value) {
     state.utilityDashboard = null
+    if (!silent && requestId === utilityDashboardRequestId) {
+      utilityDashboardLoading.value = false
+    }
     return
   }
 
-  state.utilityDashboard = await api.utilityDashboard({
-    plantId: selectedPlantId.value,
-    date: selectedUtilityDate.value || undefined,
-    period: selectedUtilityPeriod.value,
-  })
-  if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
-    await preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date()))
+  if (!silent) {
+    utilityDashboardLoading.value = true
   }
-  startEnergyWebSocket()
-  startEnergyPolling()
+
+  try {
+    const dashboard = await api.utilityDashboard({
+      plantId: selectedPlantId.value,
+      date: selectedUtilityDate.value || undefined,
+      period: selectedUtilityPeriod.value,
+    })
+    if (requestId !== utilityDashboardRequestId) {
+      return
+    }
+    state.utilityDashboard = dashboard
+    if (selectedUtilityPeriod.value === 'DAY' && selectedUtilityDateIsToday.value) {
+      preloadPlantLiveEnergy(selectedUtilityDate.value, formatDateTimeInput(new Date())).catch(() => {})
+    }
+    startEnergyWebSocket()
+  } finally {
+    if (!silent && requestId === utilityDashboardRequestId) {
+      utilityDashboardLoading.value = false
+    }
+  }
 }
 
-async function loadEsgDashboard() {
+async function loadEsgDashboard(options = {}) {
+  const { silent = false } = options || {}
+  const requestId = ++esgDashboardRequestId
   const range = monthRange(selectedEsgMonth.value)
   selectedEsgFrom.value = range.from
   selectedEsgTo.value = range.to
-  state.esgDashboard = await api.esgEnvironmentDashboard({
-    plantId: selectedPlantId.value || undefined,
-    ...dateRangeParams(range.from, range.to),
-  })
-  await renderEsgKakaoMap()
-}
 
-async function loadLatestEnergy() {
-  if (!selectedPlantId.value || appMode.value === 'login') {
-    state.latestEnergy = null
-    return
-  }
-  if (Date.now() < latestEnergyPollRetryAt) {
-    return
+  if (!silent) {
+    esgDashboardLoading.value = true
   }
 
-  if (activePage.value === 'facility' && selectedFacilityDateIsToday.value) {
-    const visibleFacilityIds = new Set(allLineFacilityIds(selectedPlantId.value))
-    let rows = []
-    try {
-      rows = await api.energyMeasurements({
-        plantId: selectedPlantId.value,
-        from: `${formatDateInput(new Date())}T00:00:00`,
-        to: formatDateTimeInput(new Date()),
-        limit: 5000,
-      })
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    rememberLatestRowsByFacility(rows, visibleFacilityIds)
-    state.latestEnergy = selectedLiveEnergy.value || Array.from(liveEnergyByFacility.values()).find((message) =>
-      visibleFacilityIds.has(Number(message.facilityId))
-    ) || null
-    return
-  }
-
-  if (selectedFacilityId.value) {
-    let latestEnergy = null
-    try {
-      latestEnergy = await api.latestEnergy(selectedPlantId.value, selectedFacilityId.value)
-      markLatestEnergyPollSuccess()
-    } catch {
-      markLatestEnergyPollFailure()
-      return
-    }
-    state.latestEnergy = rememberEnergyMessage(latestEnergy) || latestEnergy
-    return
-  }
-
-  let rows = []
   try {
-    rows = await api.energyMeasurements({
-      plantId: selectedPlantId.value,
-      from: `${formatDateInput(new Date())}T00:00:00`,
-      to: formatDateTimeInput(new Date()),
-      limit: 5000,
+    const dashboard = await api.esgEnvironmentDashboard({
+      plantId: selectedPlantId.value || undefined,
+      ...dateRangeParams(range.from, range.to),
     })
-    markLatestEnergyPollSuccess()
-  } catch {
-    markLatestEnergyPollFailure()
-    return
-  }
-  rememberLatestRowsByFacility(rows, new Set(allLineFacilityIds(selectedPlantId.value)))
-  state.latestEnergy = selectedLiveEnergy.value || null
-  if (activePage.value === 'peak') {
-    schedulePeakRefresh()
-  }
-  if (activePage.value === 'utility') {
-    scheduleUtilityRefresh()
+    if (requestId !== esgDashboardRequestId) {
+      return
+    }
+    state.esgDashboard = dashboard
+  } finally {
+    if (!silent && requestId === esgDashboardRequestId) {
+      esgDashboardLoading.value = false
+      await nextTick()
+      await renderEsgGoogleMap()
+    }
   }
 }
 
@@ -2526,33 +2961,6 @@ function stopEnergyWebSocket() {
   }
 }
 
-function startEnergyPolling() {
-  if (energyPollTimer || appMode.value === 'login') {
-    return
-  }
-
-  energyPollTimer = window.setInterval(async () => {
-    if (latestEnergyPollInFlight || appMode.value === 'login') {
-      return
-    }
-
-    latestEnergyPollInFlight = true
-    try {
-      await loadLatestEnergy()
-    } finally {
-      latestEnergyPollInFlight = false
-    }
-  }, LIVE_POLL_MS)
-}
-
-function stopEnergyPolling() {
-  window.clearInterval(energyPollTimer)
-  energyPollTimer = null
-  latestEnergyPollInFlight = false
-  latestEnergyPollRetryAt = 0
-  latestEnergyPollFailureCount = 0
-}
-
 async function refreshData() {
   if (appMode.value === 'detail' && activePage.value !== 'facility') {
     await run(loadActivePageData)
@@ -2562,26 +2970,26 @@ async function refreshData() {
 }
 
 function schedulePeakRefresh() {
-  if (peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+  if (peakDashboardLoading.value || peakRefreshTimer || Date.now() - lastPeakRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
     return
   }
   window.clearTimeout(peakRefreshTimer)
   peakRefreshTimer = window.setTimeout(() => {
     lastPeakRefreshAt = Date.now()
     peakRefreshTimer = null
-    loadPeakDashboard().catch(() => {})
+    loadPeakDashboard({ silent: true }).catch(() => {})
   }, 1000)
 }
 
 function scheduleUtilityRefresh() {
-  if (utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
+  if (utilityDashboardLoading.value || utilityRefreshTimer || Date.now() - lastUtilityRefreshAt < LIVE_DASHBOARD_REFRESH_MS) {
     return
   }
   window.clearTimeout(utilityRefreshTimer)
   utilityRefreshTimer = window.setTimeout(() => {
     lastUtilityRefreshAt = Date.now()
     utilityRefreshTimer = null
-    loadUtilityDashboard().catch(() => {})
+    loadUtilityDashboard({ silent: true }).catch(() => {})
   }, 1000)
 }
 
@@ -2590,21 +2998,21 @@ function scheduleAlarmRefresh() {
     return
   }
   lastAlarmRefreshAt = Date.now()
-  loadAlarms()
+  loadAlarms({ silent: true })
     .catch(() => {})
 }
 
 async function resolveAlarm(alarmId) {
   await run(async () => {
     await api.resolveAlarm(alarmId)
-    await loadAlarms()
+    await loadAlarms({ silent: true })
   })
 }
 
 async function deleteAlarm(alarmId) {
   await run(async () => {
     await api.deleteAlarm(alarmId)
-    await loadAlarms()
+    await loadAlarms({ silent: true })
   })
 }
 
@@ -2730,7 +3138,13 @@ watch(selectedEsgMonth, () => {
 
 watch([selectedEsgPlant, esgMapPlants, activePage], () => {
   if (appMode.value !== 'login' && activePage.value === 'esg') {
-    renderEsgKakaoMap()
+    renderEsgGoogleMap()
+  }
+}, { flush: 'post' })
+
+watch([dashboardPlants, selectedPlantId, activePage], () => {
+  if (appMode.value !== 'login' && activePage.value === 'dashboard') {
+    renderDashboardGoogleMap()
   }
 }, { flush: 'post' })
 
@@ -2748,8 +3162,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnergyWebSocket()
-  stopEnergyPolling()
-  clearEsgMapMarkers()
+  resetDashboardGoogleMap()
+  resetEsgGoogleMap()
   window.clearInterval(realtimeTickTimer)
   window.clearTimeout(peakRefreshTimer)
   window.clearTimeout(utilityRefreshTimer)
@@ -2762,8 +3176,12 @@ onUnmounted(() => {
   <main v-if="appMode === 'login'" class="login-shell">
     <section class="login-page">
       <article class="login-visual">
-        <p>Smart Factory SCADA</p>
-        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다.</h2>
+        <div class="login-brand">
+          <img :src="brandLogoUrl" :alt="`${PLATFORM_NAME} logo`" />
+          <span>{{ PLATFORM_NAME }}</span>
+        </div>
+        <h2>에너지 데이터와 ESG 지표를 한 화면에서 확인합니다</h2>
+        <p class="login-tagline">{{ PLATFORM_TAGLINE }}</p>
         <div class="login-lines"></div>
       </article>
       <form class="login-card" @submit.prevent="login">
@@ -2781,7 +3199,7 @@ onUnmounted(() => {
   <main v-else-if="appMode === 'scada'" class="scada-dashboard">
     <header class="scada-top">
       <div>
-        <p>Web SCADA</p>
+        <p>{{ PLATFORM_NAME }} Live</p>
         <h1>에너지 종합 현황</h1>
       </div>
       <div class="scada-top-actions">
@@ -2904,8 +3322,10 @@ onUnmounted(() => {
   <main v-else class="detail-shell">
     <aside class="sidebar">
       <button class="logo-button" type="button" @click="goScada">
-        <span class="logo-symbol">SF</span>
-        <b>SCADA</b>
+        <span class="logo-symbol brand-logo-mark">
+          <img :src="BRAND_MARK_URL" alt="" aria-hidden="true" />
+        </span>
+        <b>{{ PLATFORM_NAME }}</b>
       </button>
       <nav class="side-nav" aria-label="상세 화면">
         <button
@@ -2923,7 +3343,10 @@ onUnmounted(() => {
           <span class="avatar">{{ state.me?.name?.slice(0, 1) || 'U' }}</span>
           <span><b>{{ state.me?.name || '사용자' }}</b>{{ state.me?.role || '-' }}</span>
         </button>
-        <button class="collapse-button" type="button" @click="goScada">대시보드</button>
+        <button class="side-logout-button" type="button" @click="logout">
+          <LogOut :size="18" />
+          <span>로그아웃</span>
+        </button>
       </div>
     </aside>
 
@@ -2939,7 +3362,32 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <section v-if="activePage !== 'esg'" class="filter-card">
+      <section v-if="activePage === 'dashboard'" class="page-stack dashboard-page">
+        <article class="dashboard-map-panel">
+          <div class="dashboard-map-head">
+            <div>
+              <span>{{ PLATFORM_NAME }} Network</span>
+              <h2>사업장 환경종합 현황도</h2>
+            </div>
+            <b>{{ dashboardPlants.length }}개 사업장</b>
+          </div>
+
+          <div class="plant-map-stage">
+            <div
+              ref="dashboardMapElement"
+              class="google-dashboard-map"
+              aria-label="Plant dashboard map"
+            ></div>
+            <div v-if="dashboardMapState.status !== 'ready'" class="map-loading-state">
+              <Factory :size="22" />
+              <strong>{{ dashboardMapState.message }}</strong>
+              <span v-if="dashboardMapState.status === 'missing-key'">Set VITE_GOOGLE_MAPS_API_KEY in frontend/.env.</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section v-if="activePage !== 'esg' && activePage !== 'dashboard'" class="filter-card">
         <label>
           사업장
           <select v-model.number="selectedPlantId">
@@ -2991,6 +3439,13 @@ onUnmounted(() => {
                     <path :d="equipmentIconPath"></path>
                   </svg>
                 </span>
+                <em
+                  v-if="selectedFacilityDateIsToday"
+                  class="facility-equipment-status"
+                  :class="{ warn: facility.facilityStatus !== 'RUNNING' }"
+                >
+                  {{ statusLabel(facility.facilityStatus) }}
+                </em>
                 <strong>{{ facilityCode(facility) }}</strong>
                 <small>{{ facilityProcessName(facility) }}</small>
                 <b>{{ formatNumber(facility.todayUsageKwh, selectedEnergyPrecision) }} <em>{{ selectedEnergyMeta.unit }}</em></b>
@@ -3080,7 +3535,7 @@ onUnmounted(() => {
         <section class="peak-filter-row">
           <label>
             조회일
-            <input v-model="selectedPeakDate" type="date" />
+            <input v-model="selectedPeakDate" type="date" :disabled="peakDashboardLoading" />
           </label>
           <div class="peak-period-control">
             <span>집계 단위</span>
@@ -3090,19 +3545,33 @@ onUnmounted(() => {
                 :key="option.value"
                 type="button"
                 :class="{ active: selectedPeakPeriod === option.value }"
+                :disabled="peakDashboardLoading"
                 @click="selectedPeakPeriod = option.value"
               >
                 {{ option.label }}
               </button>
             </div>
           </div>
-          <button class="primary-button compact" type="button" @click="run(loadPeakDashboard)">
-            <Search :size="17" /> 조회
+          <button class="primary-button compact" type="button" :disabled="peakDashboardLoading" @click="run(loadPeakDashboard)">
+            <Search :size="17" /> {{ peakDashboardLoading ? '로딩 중' : '조회' }}
           </button>
-          <span class="live-pill">{{ peakLivePillLabel }}</span>
+          <span class="live-pill" :class="{ loading: peakDashboardLoading }">
+            {{ peakDashboardLoading ? `${peakPeriodLabel} 데이터 로딩 중` : peakLivePillLabel }}
+          </span>
         </section>
 
-        <section class="peak-kpi-grid">
+        <section class="peak-kpi-grid" :aria-busy="peakDashboardLoading">
+          <template v-if="peakDashboardLoading">
+            <article v-for="index in 4" :key="`peak-kpi-skeleton-${index}`" class="peak-kpi-card peak-kpi-skeleton-card" aria-hidden="true">
+              <span class="peak-skeleton-icon"></span>
+              <div class="peak-skeleton-copy">
+                <span class="peak-skeleton-line short"></span>
+                <span class="peak-skeleton-line value"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+            </article>
+          </template>
+          <template v-else>
           <article class="peak-kpi-card">
             <span class="peak-card-icon blue"><Zap :size="22" /></span>
             <div>
@@ -3135,6 +3604,65 @@ onUnmounted(() => {
               <em>{{ peakPreviousPeriodLabel }} {{ formatNumber(peakMetrics.previousDayAverageRate) }}%</em>
             </div>
           </article>
+          </template>
+        </section>
+
+        <section class="panel peak-bill-summary-card" :aria-busy="peakDashboardLoading">
+          <template v-if="peakDashboardLoading">
+            <div class="peak-bill-heading">
+              <span class="peak-skeleton-icon small"></span>
+              <div>
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+            </div>
+            <div class="peak-bill-summary-skeleton">
+              <span class="peak-skeleton-line hero"></span>
+              <span v-for="index in 4" :key="`peak-bill-summary-skeleton-${index}`" class="peak-skeleton-line medium"></span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="peak-bill-heading">
+              <span class="peak-bill-icon"><ReceiptText :size="22" /></span>
+              <div>
+                <h2>전기요금 추정</h2>
+                <p>{{ peakBillSummary.tariffName }} · {{ peakBillSummary.periodRangeLabel }}</p>
+              </div>
+            </div>
+            <div v-if="peakBillError" class="peak-bill-error" role="status">
+              <AlertTriangle :size="18" />
+              <span>{{ peakBillError }}</span>
+            </div>
+            <div v-else-if="peakBillSummary.hasEstimate" class="peak-bill-summary-content">
+              <div class="peak-bill-total">
+                <span>예상 합계</span>
+                <strong>{{ formatMoney(peakBillSummary.estimatedTotalKrw) }}</strong>
+                <em>추정치 · {{ peakBillSummary.currencyUnit }}</em>
+              </div>
+              <div class="peak-bill-mini-grid">
+                <article>
+                  <span>기본요금</span>
+                  <b>{{ formatMoney(peakBillSummary.basicChargeKrw) }}</b>
+                </article>
+                <article>
+                  <span>전력량요금</span>
+                  <b>{{ formatMoney(peakBillSummary.energyChargeKrw) }}</b>
+                </article>
+                <article>
+                  <span>산정 피크</span>
+                  <b>{{ formatNumber(peakBillSummary.billingDemandKw, 2) }} {{ peakBillSummary.demandUnit }}</b>
+                </article>
+                <article>
+                  <span>피크 시각</span>
+                  <b>{{ formatDateTime(peakBillSummary.billingPeakMeasuredAt) }}</b>
+                </article>
+              </div>
+            </div>
+            <div v-else class="peak-bill-error muted" role="status">
+              <AlertTriangle :size="18" />
+              <span>요금 추정 데이터가 없습니다.</span>
+            </div>
+          </template>
         </section>
 
         <section class="peak-view-tabs" aria-label="피크 전력 보기">
@@ -3149,7 +3677,96 @@ onUnmounted(() => {
           </button>
         </section>
 
-        <section v-if="activePeakView === 'comparison'" class="peak-comparison-grid">
+        <section v-if="peakDashboardLoading" class="peak-loading-region" role="status" aria-live="polite">
+          <span class="sr-only">{{ peakPeriodLabel }} 피크 전력 데이터를 불러오는 중입니다.</span>
+
+          <section v-if="activePeakView === 'comparison'" class="peak-comparison-grid peak-skeleton-grid" aria-hidden="true">
+            <article class="panel peak-comparison-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-plant-bars peak-skeleton-bars">
+                <div v-for="index in 6" :key="`peak-plant-skeleton-${index}`" class="peak-skeleton-bar-row">
+                  <span class="peak-skeleton-dot"></span>
+                  <span class="peak-skeleton-line name"></span>
+                  <span class="peak-skeleton-track"><i></i></span>
+                  <span class="peak-skeleton-line number"></span>
+                  <span class="peak-skeleton-line percent"></span>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel peak-selected-plant-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-icon small"></span>
+              </div>
+              <div class="peak-selected-summary peak-selected-summary-skeleton">
+                <span class="peak-skeleton-line name"></span>
+                <span class="peak-skeleton-line hero"></span>
+                <span class="peak-skeleton-line medium"></span>
+                <span class="peak-skeleton-line medium"></span>
+                <span class="peak-skeleton-line short"></span>
+              </div>
+            </article>
+          </section>
+
+          <section v-else-if="activePeakView === 'detail'" class="peak-content-grid peak-skeleton-grid" aria-hidden="true">
+            <article class="panel peak-gauge-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line short"></span>
+              </div>
+              <div class="peak-skeleton-gauge"></div>
+              <div class="peak-skeleton-scale">
+                <span></span><span></span><span></span><span></span>
+              </div>
+            </article>
+
+            <article class="panel peak-chart-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-skeleton-chart">
+                <span v-for="index in 5" :key="`peak-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel peak-ranking-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-icon small"></span>
+              </div>
+              <div class="peak-skeleton-ranking">
+                <span v-for="index in 5" :key="`peak-ranking-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel peak-bill-detail-panel peak-skeleton-panel">
+              <div class="peak-skeleton-title-row">
+                <span class="peak-skeleton-line title"></span>
+                <span class="peak-skeleton-line medium"></span>
+              </div>
+              <div class="peak-bill-detail-skeleton">
+                <span v-for="index in 7" :key="`peak-bill-detail-skeleton-${index}`" class="peak-skeleton-line medium"></span>
+              </div>
+            </article>
+          </section>
+
+          <article v-else class="panel table-panel peak-history-panel peak-skeleton-panel peak-history-skeleton" aria-hidden="true">
+            <div class="peak-skeleton-title-row">
+              <span class="peak-skeleton-line title"></span>
+              <span class="peak-skeleton-icon small"></span>
+            </div>
+            <div class="peak-skeleton-table">
+              <span v-for="index in 7" :key="`peak-history-skeleton-${index}`"></span>
+            </div>
+          </article>
+        </section>
+
+        <section v-else-if="activePeakView === 'comparison'" class="peak-comparison-grid">
           <article class="panel peak-comparison-panel">
             <div class="panel-title inline">
               <h2>공장별 피크 전력 비교</h2>
@@ -3253,6 +3870,60 @@ onUnmounted(() => {
               </article>
             </div>
           </article>
+
+          <article class="panel peak-bill-detail-panel">
+            <div class="panel-title inline">
+              <h2>요금 산정 상세</h2>
+              <span>{{ peakBillSummary.tariffName }} · {{ peakBillSummary.periodRangeLabel }}</span>
+            </div>
+            <div v-if="peakBillError" class="peak-bill-error" role="status">
+              <AlertTriangle :size="18" />
+              <span>{{ peakBillError }}</span>
+            </div>
+            <template v-else-if="peakBillSummary.hasEstimate">
+              <div class="peak-bill-formula-grid">
+                <article>
+                  <span>기본요금</span>
+                  <strong>{{ formatMoney(peakBillSummary.basicChargeKrw) }}</strong>
+                  <em>
+                    {{ formatNumber(peakBillSummary.billingDemandKw, 2) }} {{ peakBillSummary.demandUnit }}
+                    × {{ formatNumber(peakBillSummary.basicRateKrwPerKw, 0) }}원/{{ peakBillSummary.demandUnit }}
+                  </em>
+                </article>
+                <article>
+                  <span>전력량요금</span>
+                  <strong>{{ formatMoney(peakBillSummary.energyChargeKrw) }}</strong>
+                  <em>시간대별 {{ peakBillSummary.usageUnit }} × 원/{{ peakBillSummary.usageUnit }}</em>
+                </article>
+                <article>
+                  <span>예상 합계</span>
+                  <strong>{{ formatMoney(peakBillSummary.estimatedTotalKrw) }}</strong>
+                  <em>기본요금 + 전력량요금</em>
+                </article>
+              </div>
+
+              <div class="peak-bill-breakdown-list">
+                <article v-for="row in peakBillBreakdownRows" :key="row.id">
+                  <div>
+                    <b>{{ row.seasonName }} · {{ row.loadPeriodName }}</b>
+                    <span>{{ formatNumber(row.usageKwh, 2) }} kWh × {{ formatNumber(row.rateKrwPerKwh) }}원/kWh</span>
+                  </div>
+                  <strong>{{ formatMoney(row.chargeKrw) }}</strong>
+                </article>
+                <p v-if="!peakBillBreakdownRows.length">선택 기간의 전력량요금 산정 데이터가 없습니다.</p>
+              </div>
+
+              <div class="peak-bill-assumptions">
+                <span v-for="assumption in peakBillSummary.assumptions" :key="assumption">
+                  {{ assumption }}
+                </span>
+              </div>
+            </template>
+            <div v-else class="peak-bill-error muted" role="status">
+              <AlertTriangle :size="18" />
+              <span>요금 추정 데이터가 없습니다.</span>
+            </div>
+          </article>
         </section>
 
         <article v-else-if="activePeakView === 'anomaly'" class="panel table-panel peak-history-panel">
@@ -3294,7 +3965,7 @@ onUnmounted(() => {
         <section class="utility-filter-row">
           <label>
             조회일
-            <input v-model="selectedUtilityDate" type="date" />
+            <input v-model="selectedUtilityDate" type="date" :disabled="utilityDashboardLoading" />
           </label>
           <div class="utility-period-control">
             <span>집계 단위</span>
@@ -3304,19 +3975,33 @@ onUnmounted(() => {
                 :key="option.value"
                 type="button"
                 :class="{ active: selectedUtilityPeriod === option.value }"
+                :disabled="utilityDashboardLoading"
                 @click="selectedUtilityPeriod = option.value"
               >
                 {{ option.label }}
               </button>
             </div>
           </div>
-          <button class="primary-button compact" type="button" @click="run(loadUtilityDashboard)">
-            <Search :size="17" /> 조회
+          <button class="primary-button compact" type="button" :disabled="utilityDashboardLoading" @click="run(loadUtilityDashboard)">
+            <Search :size="17" /> {{ utilityDashboardLoading ? '로딩 중' : '조회' }}
           </button>
-          <span class="live-pill">{{ utilityLivePillLabel }}</span>
+          <span class="live-pill" :class="{ loading: utilityDashboardLoading }">
+            {{ utilityDashboardLoading ? `${utilityPeriodLabel} 데이터 로딩 중` : utilityLivePillLabel }}
+          </span>
         </section>
 
-        <section class="utility-kpi-grid">
+        <section class="utility-kpi-grid" :aria-busy="utilityDashboardLoading">
+          <template v-if="utilityDashboardLoading">
+            <article v-for="index in 4" :key="`utility-kpi-skeleton-${index}`" :class="['utility-kpi-card', index <= 2 ? 'gas' : 'water', 'utility-kpi-skeleton-card']" aria-hidden="true">
+              <span class="utility-skeleton-icon"></span>
+              <div class="utility-skeleton-copy">
+                <span class="utility-skeleton-line short"></span>
+                <span class="utility-skeleton-line value"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+            </article>
+          </template>
+          <template v-else>
           <article class="utility-kpi-card gas">
             <span class="utility-card-icon"><Flame :size="23" /></span>
             <div>
@@ -3353,6 +4038,7 @@ onUnmounted(() => {
               <em>이번 달 누적 사용량</em>
             </div>
           </article>
+          </template>
         </section>
 
         <section class="utility-view-tabs" aria-label="가스 용수 보기">
@@ -3367,7 +4053,104 @@ onUnmounted(() => {
           </button>
         </section>
 
-        <section v-if="activeUtilityView === 'comparison'" class="utility-comparison-grid">
+        <section v-if="utilityDashboardLoading" class="utility-loading-region" role="status" aria-live="polite">
+          <span class="sr-only">{{ utilityPeriodLabel }} 가스/용수 데이터를 불러오는 중입니다.</span>
+
+          <section v-if="activeUtilityView === 'comparison'" class="utility-comparison-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel utility-comparison-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-plant-bars">
+                <div v-for="index in 6" :key="`utility-plant-skeleton-${index}`" class="utility-skeleton-plant-row">
+                  <span class="utility-skeleton-line name"></span>
+                  <div>
+                    <span class="utility-skeleton-track gas"><i></i></span>
+                    <span class="utility-skeleton-line number"></span>
+                  </div>
+                  <div>
+                    <span class="utility-skeleton-track water"><i></i></span>
+                    <span class="utility-skeleton-line number"></span>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel utility-selected-plant-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-icon small"></span>
+              </div>
+              <div class="utility-selected-summary utility-selected-summary-skeleton">
+                <span class="utility-skeleton-line name"></span>
+                <article>
+                  <span class="utility-skeleton-line short"></span>
+                  <span class="utility-skeleton-line hero"></span>
+                  <span class="utility-skeleton-line medium"></span>
+                </article>
+                <article>
+                  <span class="utility-skeleton-line short"></span>
+                  <span class="utility-skeleton-line hero"></span>
+                  <span class="utility-skeleton-line medium"></span>
+                </article>
+              </div>
+            </article>
+          </section>
+
+          <section v-else-if="activeUtilityView === 'detail'" class="utility-chart-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel utility-chart-panel gas utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-chart gas">
+                <span v-for="index in 5" :key="`utility-gas-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel utility-chart-panel water utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-chart water">
+                <span v-for="index in 5" :key="`utility-water-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+          </section>
+
+          <section v-else class="utility-bottom-grid utility-skeleton-grid" aria-hidden="true">
+            <article class="panel table-panel utility-meter-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-icon small"></span>
+              </div>
+              <div class="utility-skeleton-toolbar">
+                <span class="utility-skeleton-line input"></span>
+                <span class="utility-skeleton-line short"></span>
+              </div>
+              <div class="utility-skeleton-table">
+                <span v-for="index in 6" :key="`utility-meter-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel utility-pattern-panel utility-skeleton-panel">
+              <div class="utility-skeleton-title-row">
+                <span class="utility-skeleton-line title"></span>
+                <span class="utility-skeleton-line medium"></span>
+              </div>
+              <div class="utility-skeleton-pattern-grid">
+                <span v-for="index in 16" :key="`utility-pattern-skeleton-${index}`" class="utility-skeleton-pattern-cell"></span>
+              </div>
+              <div class="utility-skeleton-scale">
+                <span></span><i></i><span></span>
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section v-else-if="activeUtilityView === 'comparison'" class="utility-comparison-grid">
           <article class="panel utility-comparison-panel">
             <div class="panel-title inline">
               <h2>공장별 가스/용수 사용량 비교</h2>
@@ -3594,21 +4377,34 @@ onUnmounted(() => {
         <section class="esg-filter-row">
           <label>
             사업장
-            <select v-model.number="selectedPlantId">
+            <select v-model.number="selectedPlantId" :disabled="esgDashboardLoading">
               <option v-for="plant in state.plants" :key="plant.id" :value="plant.id">{{ plant.name }}</option>
             </select>
           </label>
           <label>
             조회월
-            <input v-model="selectedEsgMonth" type="month" />
+            <input v-model="selectedEsgMonth" type="month" :disabled="esgDashboardLoading" />
           </label>
-          <button class="primary-button compact" type="button" @click="run(loadEsgDashboard)">
-            <Search :size="17" /> 조회
+          <button class="primary-button compact" type="button" :disabled="esgDashboardLoading" @click="run(loadEsgDashboard)">
+            <Search :size="17" /> {{ esgDashboardLoading ? '로딩 중' : '조회' }}
           </button>
-          <span class="live-pill">월간 환경 점수 0-10</span>
+          <span class="live-pill" :class="{ loading: esgDashboardLoading }">
+            {{ esgDashboardLoading ? 'ESG 평가 데이터 로딩 중' : '월간 환경 점수 0-10' }}
+          </span>
         </section>
 
-        <section class="esg-kpi-grid">
+        <section class="esg-kpi-grid" :aria-busy="esgDashboardLoading">
+          <template v-if="esgDashboardLoading">
+            <article v-for="index in 5" :key="`esg-kpi-skeleton-${index}`" :class="['esg-kpi-card', 'esg-kpi-skeleton-card', index === 1 ? 'grade' : '']" aria-hidden="true">
+              <span class="esg-skeleton-icon"></span>
+              <div class="esg-skeleton-copy">
+                <span class="esg-skeleton-line short"></span>
+                <span class="esg-skeleton-line value"></span>
+                <span class="esg-skeleton-line medium"></span>
+              </div>
+            </article>
+          </template>
+          <template v-else>
           <article class="esg-grade-card">
             <span><Leaf :size="24" /></span>
             <div>
@@ -3627,9 +4423,58 @@ onUnmounted(() => {
               </em>
             </div>
           </article>
+          </template>
         </section>
 
-        <section class="esg-main-grid">
+        <section v-if="esgDashboardLoading" class="esg-loading-region" role="status" aria-live="polite">
+          <span class="sr-only">ESG 평가 데이터를 불러오는 중입니다.</span>
+
+          <section class="esg-main-grid esg-skeleton-grid" aria-hidden="true">
+            <article class="panel esg-map-panel esg-skeleton-panel">
+              <div class="esg-skeleton-title-row">
+                <span class="esg-skeleton-line title"></span>
+                <span class="esg-skeleton-line medium"></span>
+              </div>
+              <div class="esg-skeleton-map">
+                <span v-for="index in 6" :key="`esg-map-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel esg-ranking-panel esg-skeleton-panel">
+              <div class="esg-skeleton-title-row">
+                <span class="esg-skeleton-line title"></span>
+                <span class="esg-skeleton-icon small"></span>
+              </div>
+              <div class="esg-skeleton-ranking">
+                <span v-for="index in 6" :key="`esg-ranking-skeleton-${index}`"></span>
+              </div>
+            </article>
+          </section>
+
+          <section class="esg-bottom-grid esg-skeleton-grid" aria-hidden="true">
+            <article class="panel esg-compare-panel esg-skeleton-panel">
+              <div class="esg-skeleton-title-row">
+                <span class="esg-skeleton-line title"></span>
+                <span class="esg-skeleton-line short"></span>
+              </div>
+              <div class="esg-skeleton-grouped-chart">
+                <span v-for="index in 6" :key="`esg-chart-skeleton-${index}`"></span>
+              </div>
+            </article>
+
+            <article class="panel esg-detail-panel esg-skeleton-panel">
+              <div class="esg-skeleton-title-row">
+                <span class="esg-skeleton-line title"></span>
+                <span class="esg-skeleton-line medium"></span>
+              </div>
+              <div class="esg-skeleton-detail-list">
+                <span v-for="index in 6" :key="`esg-detail-skeleton-${index}`"></span>
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section v-else class="esg-main-grid">
           <article class="panel esg-map-panel">
             <div class="panel-title inline">
               <h2>사업장 환경 등급 현황</h2>
@@ -3697,7 +4542,7 @@ onUnmounted(() => {
               <div v-if="!['ready', 'fallback'].includes(esgMapState.status)" class="esg-map-state">
                 <Factory :size="22" />
                 <strong>{{ esgMapState.message }}</strong>
-                <span v-if="esgMapState.status === 'missing-key'">frontend/.env에 VITE_KAKAO_MAP_APP_KEY를 추가해 주세요.</span>
+                <span v-if="esgMapState.status === 'missing-key'">Set VITE_GOOGLE_MAPS_API_KEY in frontend/.env.</span>
               </div>
             </div>
           </article>
@@ -3727,7 +4572,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="esg-bottom-grid">
+        <section v-if="!esgDashboardLoading" class="esg-bottom-grid">
           <article class="panel esg-compare-panel">
             <div class="panel-title inline">
               <h2>통합 환경 항목 비교</h2>
@@ -3788,7 +4633,7 @@ onUnmounted(() => {
                 <div class="chatbot-bubble assistant">
                   <span>
                     <Bot :size="16" />
-                    {{ message.plantName || selectedPlant?.name || 'SCADA AI' }}
+                    {{ message.plantName || selectedPlant?.name || PLATFORM_AI_NAME }}
                     <small>{{ formatDateTime(message.createdAt) }}</small>
                     <button
                       class="chatbot-delete-button"
@@ -3914,8 +4759,17 @@ onUnmounted(() => {
 
       <section v-else-if="activePage === 'users'" class="page-stack users-page">
         <article class="panel table-panel">
-          <h2>사용자 목록</h2>
-          <table>
+          <div class="panel-title inline">
+            <h2>사용자 목록</h2>
+            <span class="live-pill" :class="{ loading: usersLoading }">
+              {{ usersLoading ? '사용자 데이터 로딩 중' : `${state.users.length}명` }}
+            </span>
+          </div>
+          <div v-if="usersLoading" class="user-skeleton-table" role="status" aria-live="polite">
+            <span class="sr-only">사용자 목록을 불러오는 중입니다.</span>
+            <span v-for="index in 8" :key="`user-row-skeleton-${index}`"></span>
+          </div>
+          <table v-else>
             <thead><tr><th>ID</th><th>이름</th><th>이메일</th><th>권한</th><th>사업장 ID</th><th>상태</th><th>최근 로그인</th></tr></thead>
             <tbody>
               <tr v-for="user in state.users" :key="user.userId">
@@ -3927,6 +4781,9 @@ onUnmounted(() => {
                 <td><span :class="['badge', user.status === 'ACTIVE' ? 'ok' : 'warn']">{{ statusLabel(user.status) }}</span></td>
                 <td>{{ formatDateTime(user.lastLoginAt) }}</td>
               </tr>
+              <tr v-if="!state.users.length">
+                <td colspan="7">사용자 데이터가 없습니다.</td>
+              </tr>
             </tbody>
           </table>
         </article>
@@ -3937,7 +4794,12 @@ onUnmounted(() => {
             <UserPlus :size="20" />
           </div>
 
-          <form class="user-create-form" @submit.prevent="submitUserCreate">
+          <div v-if="usersLoading" class="user-skeleton-form" aria-hidden="true">
+            <span v-for="index in 6" :key="`user-form-skeleton-${index}`"></span>
+            <span class="button"></span>
+          </div>
+
+          <form v-else class="user-create-form" @submit.prevent="submitUserCreate">
             <label>
               <span>이메일</span>
               <input v-model.trim="userCreateForm.email" type="email" placeholder="user@example.com" required />
@@ -3977,8 +4839,35 @@ onUnmounted(() => {
         </aside>
       </section>
 
-      <section v-else class="page-stack alarm-page">
-        <article v-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
+      <section v-else-if="activePage === 'alarms'" class="page-stack alarm-page">
+        <article v-if="alarmsLoading" class="panel table-panel alarm-tab-panel alarm-skeleton-panel" role="status" aria-live="polite">
+          <span class="sr-only">알람 목록을 불러오는 중입니다.</span>
+          <div class="panel-title inline alarm-panel-title">
+            <span class="alarm-skeleton-line title"></span>
+            <div class="alarm-skeleton-sort">
+              <span></span><span></span>
+            </div>
+          </div>
+
+          <section v-for="groupIndex in 2" :key="`alarm-group-skeleton-${groupIndex}`" class="alarm-plant-group">
+            <div class="alarm-plant-header">
+              <span class="alarm-skeleton-line heading"></span>
+              <span class="alarm-skeleton-line count"></span>
+            </div>
+
+            <div class="alarm-keyword-layout">
+              <div class="alarm-skeleton-tabs">
+                <span v-for="index in 4" :key="`alarm-tab-skeleton-${groupIndex}-${index}`"></span>
+              </div>
+
+              <div class="alarm-skeleton-table">
+                <span v-for="index in 7" :key="`alarm-row-skeleton-${groupIndex}-${index}`"></span>
+              </div>
+            </div>
+          </section>
+        </article>
+
+        <article v-else-if="alarmPlantGroups.length" class="panel table-panel alarm-tab-panel">
           <div class="panel-title inline alarm-panel-title">
             <h2>알람 목록</h2>
             <div class="segmented alarm-sort-switch" role="group" aria-label="알람 정렬">
@@ -4046,6 +4935,23 @@ onUnmounted(() => {
           </section>
         </article>
       </section>
+
+      <div v-if="solutionViewer.open" class="solution-overlay">
+        <section class="solution-frame">
+          <header>
+            <div>
+              <span>{{ PLATFORM_NAME }} Solution</span>
+              <h2>{{ solutionViewer.plant?.plantName || solutionViewer.plant?.name || '사업장 솔루션' }}</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="솔루션 화면 닫기" @click="closePlantSolution">×</button>
+          </header>
+          <iframe
+            :src="solutionViewer.url"
+            :title="`${PLATFORM_NAME} solution`"
+            referrerpolicy="no-referrer-when-downgrade"
+          ></iframe>
+        </section>
+      </div>
     </section>
   </main>
 </template>

@@ -34,12 +34,22 @@ public class EnergyMeasurementMqttService {
 	private final FacilityMapper facilityMapper;
 	private final Map<String, LegacyMeasurementSnapshot> latestLegacyMeasurements = new ConcurrentHashMap<>();
 	private final Map<String, EnergyMeasurementMessage> latestGeneratedMeasurements = new ConcurrentHashMap<>();
+	private final Map<String, Boolean> facilityExistenceCache = new ConcurrentHashMap<>();
+	private final Map<String, Boolean> generatedLineFacilitiesExistenceCache = new ConcurrentHashMap<>();
 
 	public void handleMessage(String topic, String payload) {
 		try {
 			EnergyMeasurementMessage message = withTopicIds(
 				topic,
 				objectMapper.readValue(payload, EnergyMeasurementMessage.class)
+			);
+			log.info(
+				"MQTT energy payload received. topic={}, plantId={}, facilityId={}, measuredAt={}, payload={}",
+				topic,
+				message.getPlantId(),
+				message.getFacilityId(),
+				message.getMeasuredAt(),
+				payload
 			);
 			List<EnergyMeasurementMessage> normalizedMessages = normalizeLineMeasurement(message);
 
@@ -55,16 +65,17 @@ public class EnergyMeasurementMqttService {
 					continue;
 				}
 
+				long startedAt = System.currentTimeMillis();
+				energyService.saveMeasurement(normalizedMessage);
+				energyRealtimeWebSocketHandler.broadcast(normalizedMessage);
 				log.info(
-					"MQTT energy message received. topic={}, plantId={}, facilityId={}, measuredAt={}",
+					"MQTT energy message persisted and broadcast. topic={}, plantId={}, facilityId={}, measuredAt={}, elapsedMs={}",
 					topic,
 					normalizedMessage.getPlantId(),
 					normalizedMessage.getFacilityId(),
-					normalizedMessage.getMeasuredAt()
+					normalizedMessage.getMeasuredAt(),
+					System.currentTimeMillis() - startedAt
 				);
-
-				energyService.saveMeasurement(normalizedMessage);
-				energyRealtimeWebSocketHandler.broadcast(normalizedMessage);
 			}
 		}
 		catch (JsonProcessingException exception) {
@@ -137,14 +148,20 @@ public class EnergyMeasurementMqttService {
 	}
 
 	private boolean generatedLineFacilitiesExist(Long plantId, int firstEquipmentSequence) {
+		String cacheKey = plantId + ":" + firstEquipmentSequence;
+		Boolean cached = generatedLineFacilitiesExistenceCache.get(cacheKey);
+		if (cached != null) {
+			return cached;
+		}
+
 		for (int index = 0; index < LINE_EQUIPMENT_COUNT; index += 1) {
 			long facilityId = (plantId * GENERATED_FACILITY_ID_OFFSET) + firstEquipmentSequence + index;
-			if (facilityMapper.findById(facilityId)
-				.filter(facility -> plantId.equals(facility.getPlantId()))
-				.isEmpty()) {
+			if (!facilityExists(plantId, facilityId)) {
+				generatedLineFacilitiesExistenceCache.put(cacheKey, false);
 				return false;
 			}
 		}
+		generatedLineFacilitiesExistenceCache.put(cacheKey, true);
 		return true;
 	}
 
@@ -155,10 +172,7 @@ public class EnergyMeasurementMqttService {
 		LegacyMeasurementSnapshot previousLine
 	) {
 		String generatedKey = measurementKey(source.getPlantId(), generatedFacilityId);
-		EnergyMeasurementMessage previousGenerated = latestGeneratedMeasurements.computeIfAbsent(
-			generatedKey,
-			key -> latestGeneratedMeasurement(source.getPlantId(), generatedFacilityId)
-		);
+		EnergyMeasurementMessage previousGenerated = latestGeneratedMeasurements.get(generatedKey);
 		Double sourceElectricity = source.getElectricityKwh();
 		Double sourceGas = source.getGasM3();
 		Double sourceWater = source.getWaterTon();
@@ -243,24 +257,14 @@ public class EnergyMeasurementMqttService {
 		if (message.getPlantId() == null) {
 			return false;
 		}
-		return facilityMapper.findById(message.getFacilityId())
-			.filter(facility -> message.getPlantId().equals(facility.getPlantId()))
-			.isPresent();
+		return facilityExists(message.getPlantId(), message.getFacilityId());
 	}
 
-	private EnergyMeasurementMessage latestGeneratedMeasurement(Long plantId, Long facilityId) {
-		return energyService.getLatestMeasurement(plantId, facilityId)
-			.map(measurement -> new EnergyMeasurementMessage(
-				measurement.plantId(),
-				measurement.facilityId(),
-				measurement.measuredAt() == null ? null : measurement.measuredAt().atZone(java.time.ZoneId.systemDefault()).toInstant(),
-				valueOf(measurement.electricityKwh()),
-				valueOf(measurement.gasM3()),
-				valueOf(measurement.waterTon()),
-				valueOf(measurement.solarKwh()),
-				valueOf(measurement.peakKw())
-			))
-			.orElse(null);
+	private boolean facilityExists(Long plantId, Long facilityId) {
+		String cacheKey = measurementKey(plantId, facilityId);
+		return facilityExistenceCache.computeIfAbsent(cacheKey, key -> facilityMapper.findById(facilityId)
+			.filter(facility -> plantId.equals(facility.getPlantId()))
+			.isPresent());
 	}
 
 	private Double nextAccumulatedValue(Double previousGeneratedValue, Double sourceValue, Double previousSourceValue, double weight) {

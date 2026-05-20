@@ -32,9 +32,14 @@ import com.smartfactory.scada.chatbot.mapper.ChatbotMapper;
 import com.smartfactory.scada.common.exception.BusinessException;
 import com.smartfactory.scada.common.exception.CommonErrorCode;
 import com.smartfactory.scada.energy.domain.EnergySummary;
+import com.smartfactory.scada.energy.domain.ElectricityBillDataStatus;
+import com.smartfactory.scada.energy.domain.PeakPowerPeriod;
 import com.smartfactory.scada.energy.domain.SummaryType;
+import com.smartfactory.scada.energy.dto.ElectricityBillComparisonResponse;
+import com.smartfactory.scada.energy.dto.ElectricityBillComparisonRowResponse;
 import com.smartfactory.scada.energy.dto.EnergyFacilityLineUsageResponse;
 import com.smartfactory.scada.energy.mapper.EnergyMapper;
+import com.smartfactory.scada.energy.service.ElectricityBillComparisonService;
 import com.smartfactory.scada.esg.domain.EsgScore;
 import com.smartfactory.scada.esg.mapper.EsgMapper;
 import com.smartfactory.scada.facility.domain.Facility;
@@ -62,6 +67,7 @@ public class ChatbotService {
 	private final FacilityMapper facilityMapper;
 	private final ObjectMapper objectMapper;
 	private final OpenAiChatbotClient openAiChatbotClient;
+	private final ElectricityBillComparisonService electricityBillComparisonService;
 
 	@Transactional
 	public ChatbotMessageResponse ask(AuthenticatedUser authenticatedUser, ChatbotMessageRequest request) {
@@ -79,9 +85,9 @@ public class ChatbotService {
 			OPENAI_CONTEXT_MESSAGE_LIMIT
 		);
 		ChatbotAiResponse generatedResponse = plantId == null
-			? ChatbotAiResponse.answerOnly(buildFallbackAnswer(operationalContext))
+			? ChatbotAiResponse.answerOnly(buildFallbackAnswer(question, operationalContext))
 			: openAiChatbotClient.generateResponse(question, referencedData, recentMessages)
-				.orElseGet(() -> ChatbotAiResponse.answerOnly(buildFallbackAnswer(operationalContext)));
+				.orElseGet(() -> ChatbotAiResponse.answerOnly(buildFallbackAnswer(question, operationalContext)));
 		generatedResponse = generatedResponse.withChartSpec(buildChartSpec(question, operationalContext));
 
 		ChatbotMessage message = new ChatbotMessage();
@@ -131,9 +137,12 @@ public class ChatbotService {
 		}
 	}
 
-	private String buildFallbackAnswer(OperationalContext operationalContext) {
+	private String buildFallbackAnswer(String question, OperationalContext operationalContext) {
 		if (operationalContext.plantId() == null) {
 			return "\uc0ac\uc5c5\uc7a5\uc744 \uc120\ud0dd\ud558\uba74 \ucd5c\uadfc \uc5d0\ub108\uc9c0 \uc0ac\uc6a9\ub7c9, ESG \ub4f1\uae09, \uc54c\ub78c \uc815\ubcf4\ub97c \uae30\uc900\uc73c\ub85c \ub2f5\ubcc0\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.";
+		}
+		if (isElectricityBillQuestion(question)) {
+			return buildElectricityBillFallbackText(operationalContext.electricityBillComparison());
 		}
 
 		String energyText = operationalContext.latestEnergySummary() == null
@@ -151,6 +160,22 @@ public class ChatbotService {
 		String trendText = buildTrendFallbackText(operationalContext.trendInsights());
 		String facilityLineText = buildFacilityLineFallbackText(operationalContext.facilityLineUsageSummary());
 		return energyText + " " + esgText + " " + alarmText + " " + facilityText + " " + trendText + " " + facilityLineText;
+	}
+
+	private String buildElectricityBillFallbackText(ElectricityBillComparisonResponse comparison) {
+		if (comparison == null || comparison.dataStatus() == ElectricityBillDataStatus.EMPTY || comparison.comparisons().isEmpty()) {
+			return "선택한 사업장의 월 단위 전기요금 비교 데이터가 없습니다. 피크 전력과 전력량 누적 데이터가 쌓이면 고압A 선택II 기준 추정 전기요금과 요금제별 절감 가능성을 계산할 수 있습니다.";
+		}
+
+		String savingText = comparison.estimatedSavingKrw().compareTo(BigDecimal.ZERO) > 0
+			? "예상 절감액은 " + formatMoney(comparison.estimatedSavingKrw()) + "원(" + formatDecimal(comparison.estimatedSavingRate()) + "%)입니다."
+			: "현재 기준 요금제가 최저 또는 같은 수준이라 예상 절감액은 0원입니다.";
+		return comparison.periodFrom() + "~" + comparison.periodTo() + " 기준 "
+			+ comparison.baseTariffName() + " 추정 합계는 " + formatMoney(comparison.baseEstimatedTotalKrw()) + "원입니다. "
+			+ "가장 낮은 요금제는 " + comparison.bestTariffName() + "이며 추정 합계는 "
+			+ formatMoney(comparison.bestEstimatedTotalKrw()) + "원입니다. "
+			+ savingText + " 이 값은 부가세, 기후환경요금, 연료비조정액 등을 제외한 추정치입니다. "
+			+ "다음 점검은 산정 피크 " + formatDecimal(comparison.billingDemandKw()) + "kW와 최대부하 시간대 사용량을 확인하세요.";
 	}
 
 	private String buildAlarmFallbackText(OperationalContext operationalContext) {
@@ -231,7 +256,8 @@ public class ChatbotService {
 				FacilityStatusSummary.empty(),
 				List.of(),
 				TrendInsights.empty(),
-				FacilityLineUsageSummary.empty()
+				FacilityLineUsageSummary.empty(),
+				null
 			);
 		}
 
@@ -250,6 +276,8 @@ public class ChatbotService {
 			.toList();
 		List<Facility> facilities = facilityMapper.findByPlantId(plantId);
 		List<DailyEnergyTrendPoint> dailyEnergyTrend = buildDailyEnergyTrend(plantId, referenceDate);
+		ElectricityBillComparisonResponse electricityBillComparison =
+			electricityBillComparisonService.compare(plantId, referenceDate, PeakPowerPeriod.MONTH, null);
 
 		return new OperationalContext(
 			plantId,
@@ -261,7 +289,8 @@ public class ChatbotService {
 			summarizeFacilities(facilities),
 			dailyEnergyTrend,
 			buildTrendInsights(dailyEnergyTrend),
-			buildFacilityLineUsageSummary(plantId, facilities, referenceDate)
+			buildFacilityLineUsageSummary(plantId, facilities, referenceDate),
+			electricityBillComparison
 		);
 	}
 
@@ -420,6 +449,10 @@ public class ChatbotService {
 		return zeroIfNull(value).toPlainString();
 	}
 
+	private String formatMoney(BigDecimal value) {
+		return zeroIfNull(value).setScale(0, RoundingMode.HALF_UP).toPlainString();
+	}
+
 	private String serializeReferencedData(OperationalContext operationalContext) {
 		try {
 			return objectMapper.writeValueAsString(ReferencedData.from(operationalContext));
@@ -432,6 +465,19 @@ public class ChatbotService {
 	private String buildChartSpec(String question, OperationalContext operationalContext) {
 		if (operationalContext.plantId() == null || !wantsChart(question)) {
 			return null;
+		}
+
+		if (isElectricityBillQuestion(question)) {
+			Map<String, Object> billChart = buildElectricityBillComparisonChart(operationalContext.electricityBillComparison());
+			if (billChart == null) {
+				return null;
+			}
+			try {
+				return objectMapper.writeValueAsString(billChart);
+			}
+			catch (JsonProcessingException exception) {
+				return null;
+			}
 		}
 
 		Map<String, Object> chart = questionContains(question, "설비", "라인", "상위")
@@ -453,6 +499,10 @@ public class ChatbotService {
 
 	private boolean wantsChart(String question) {
 		return questionContains(question, "그래프", "차트", "시각화", "그려", "그려줘", "추이", "비교");
+	}
+
+	private boolean isElectricityBillQuestion(String question) {
+		return questionContains(question, "전기요금", "전기세", "요금제", "절감", "비용", "요금", "원");
 	}
 
 	private boolean questionContains(String question, String... keywords) {
@@ -523,6 +573,23 @@ public class ChatbotService {
 		);
 	}
 
+	private Map<String, Object> buildElectricityBillComparisonChart(ElectricityBillComparisonResponse comparison) {
+		if (comparison == null || comparison.comparisons().isEmpty()) {
+			return null;
+		}
+		return Map.of(
+			"type", "bar",
+			"title", "요금제별 추정 전기요금 비교",
+			"unit", "원",
+			"labels", comparison.comparisons().stream().map(ElectricityBillComparisonRowResponse::tariffName).toList(),
+			"series", List.of(chartSeries(
+				"추정 합계",
+				"#0f6fff",
+				comparison.comparisons().stream().map(ElectricityBillComparisonRowResponse::estimatedTotalKrw).toList()
+			))
+		);
+	}
+
 	private Map<String, Object> chartSeries(String name, String color, List<BigDecimal> values) {
 		return Map.of(
 			"name", name,
@@ -541,7 +608,8 @@ public class ChatbotService {
 		FacilityStatusSummary facilityStatusSummary,
 		List<DailyEnergyTrendPoint> dailyEnergyTrend,
 		TrendInsights trendInsights,
-		FacilityLineUsageSummary facilityLineUsageSummary
+		FacilityLineUsageSummary facilityLineUsageSummary,
+		ElectricityBillComparisonResponse electricityBillComparison
 	) {
 	}
 
@@ -555,7 +623,8 @@ public class ChatbotService {
 		FacilityStatusSummary facilityStatusSummary,
 		List<DailyEnergyTrendPoint> dailyEnergyTrend,
 		TrendInsights trendInsights,
-		FacilityLineUsageSummary facilityLineUsageSummary
+		FacilityLineUsageSummary facilityLineUsageSummary,
+		ElectricityBillComparisonResponse electricityBillComparison
 	) {
 
 		private static ReferencedData from(OperationalContext operationalContext) {
@@ -569,7 +638,8 @@ public class ChatbotService {
 				operationalContext.facilityStatusSummary(),
 				operationalContext.dailyEnergyTrend(),
 				operationalContext.trendInsights(),
-				operationalContext.facilityLineUsageSummary()
+				operationalContext.facilityLineUsageSummary(),
+				operationalContext.electricityBillComparison()
 			);
 		}
 	}
