@@ -242,7 +242,7 @@ public class EnergyMeasurementMqttService {
 				previousSourceSolar,
 				weight
 			),
-			scaledValue(source.getPeakKw(), weight)
+			source.getPeakKw()
 		);
 		latestGeneratedMeasurements.put(generatedKey, generated);
 		return generated;

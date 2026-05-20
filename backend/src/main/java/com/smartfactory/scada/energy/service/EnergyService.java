@@ -169,7 +169,11 @@ public class EnergyService {
 
 		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
 		PeakPowerTrendPoint latestInterval = trend.isEmpty() ? null : trend.get(trend.size() - 1);
-		BigDecimal currentKw = latestMeasurement == null ? BigDecimal.ZERO : zeroIfNull(latestMeasurement.getPeakKw());
+		PeakPowerTrendPoint peakInterval = maxPeakInterval(trend);
+		boolean todayDayView = periodRange.period() == PeakPowerPeriod.DAY && resolvedDate.equals(LocalDate.now(SERVICE_ZONE));
+		BigDecimal currentKw = todayDayView && latestMeasurement != null
+			? zeroIfNull(latestMeasurement.getPeakKw())
+			: peakInterval == null ? BigDecimal.ZERO : zeroIfNull(peakInterval.getMaxKw());
 		BigDecimal intervalAverageKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getAverageKw());
 		BigDecimal intervalMaxKw = latestInterval == null ? BigDecimal.ZERO : zeroIfNull(latestInterval.getMaxKw());
 		BigDecimal previousPeriodAverageKw = averagePeak(previousPeriodTrend);
@@ -182,7 +186,9 @@ public class EnergyService {
 			previousPeriodAverageKw,
 			rateOf(currentKw, previousPeriodAverageKw),
 			thresholdKw,
-			latestMeasurement == null ? null : latestMeasurement.getMeasuredAt(),
+			todayDayView && latestMeasurement != null
+				? latestMeasurement.getMeasuredAt()
+				: peakInterval == null ? null : peakInterval.getMeasuredAt(),
 			latestInterval == null ? null : latestInterval.getMeasuredAt()
 		);
 
@@ -575,6 +581,12 @@ public class EnergyService {
 			.map(this::zeroIfNull)
 			.reduce(BigDecimal.ZERO, BigDecimal::add)
 			.divide(BigDecimal.valueOf(trend.size()), 2, RoundingMode.HALF_UP);
+	}
+
+	private PeakPowerTrendPoint maxPeakInterval(List<PeakPowerTrendPoint> trend) {
+		return trend.stream()
+			.max(Comparator.comparing(point -> zeroIfNull(point.getMaxKw())))
+			.orElse(null);
 	}
 
 	private BigDecimal peakThresholdForPlant(Long plantId) {

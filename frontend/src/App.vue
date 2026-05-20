@@ -337,7 +337,7 @@ const selectedPlantLiveEnergy = computed(() => {
       gasM3: sum.gasM3 + metricNumber(row, 'gasM3', 'gas_m3'),
       waterTon: sum.waterTon + metricNumber(row, 'waterTon', 'water_ton'),
       solarKwh: sum.solarKwh + metricNumber(row, 'solarKwh', 'solar_kwh'),
-      peakKw: sum.peakKw + metricNumber(row, 'peakKw', 'peak_kw'),
+      peakKw: metricNumber(latestRow, 'peakKw', 'peak_kw'),
     }),
     {
       plantId,
