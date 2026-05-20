@@ -848,6 +848,7 @@
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND peak_kw &lt;= 1000
               AND facility_id &gt;= 10000
               AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY summary_at, facility_id
@@ -894,6 +895,7 @@
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND peak_kw &lt;= 1000
               AND facility_id &gt;= 10000
               AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY summary_at, facility_id
@@ -940,6 +942,7 @@
               AND facility_id IS NOT NULL
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
+              AND (peak_kw IS NULL OR peak_kw &lt;= 1000)
               AND facility_id &gt;= 10000
               AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY plant_id, facility_id
@@ -1030,6 +1033,7 @@
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND peak_kw &lt;= 1000
               AND facility_id &gt;= 10000
               AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY summary_at, facility_id
@@ -1106,6 +1110,7 @@
               AND es.summary_type = CASE WHEN TIMESTAMPDIFF(DAY, #{from}, #{to}) &lt;= 1 THEN 'HOURLY' ELSE 'DAILY' END
               AND es.facility_id IS NOT NULL
               AND es.peak_kw IS NOT NULL
+              AND es.peak_kw &lt;= 1000
               AND es.facility_id &gt;= 10000
               AND MOD(es.facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY es.plant_id, es.summary_at, es.facility_id
@@ -1230,6 +1235,7 @@
               AND summary_at &gt;= #{from}
               AND summary_at &lt; #{to}
               AND peak_kw IS NOT NULL
+              AND peak_kw &lt;= 1000
               AND facility_id &gt;= 10000
               AND MOD(facility_id, 10000) BETWEEN 1 AND 24
             GROUP BY summary_at, facility_id
