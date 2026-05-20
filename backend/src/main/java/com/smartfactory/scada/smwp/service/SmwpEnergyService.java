@@ -86,6 +86,13 @@ public class SmwpEnergyService {
 				pointsByHour.put(point.getHour(), point);
 			}
 		}
+		if (isToday) {
+			for (SmwpHourlyEnergyPoint point : energyMapper.findSmwpHourlyEnergyFromMeasurements(plant.getId(), from, to)) {
+				if (point.getHour() != null) {
+					pointsByHour.put(point.getHour(), point);
+				}
+			}
+		}
 
 		SmwpDailyEnergyUsage currentHourUsage = null;
 		if (isToday) {
