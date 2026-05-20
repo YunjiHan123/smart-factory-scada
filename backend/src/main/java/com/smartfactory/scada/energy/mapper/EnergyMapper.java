@@ -229,6 +229,12 @@ public interface EnergyMapper {
 		@Param("to") LocalDateTime to
 	);
 
+	Optional<SmwpDailyEnergyUsage> findSmwpMeasurementDeltaEnergy(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
 	List<SmwpHourlyEnergyPoint> findSmwpHourlyEnergy(
 		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
