@@ -140,7 +140,7 @@ public class EnergyService {
 			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
 		}
 
-		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
+		LocalDate resolvedDate = targetDate == null ? LocalDate.now(SERVICE_ZONE) : targetDate;
 		PeakPowerPeriodRange periodRange = resolvePeakPowerPeriodRange(resolvedDate, period);
 		PeakPowerPeriodRange previousPeriodRange = previousPeakPowerPeriodRange(periodRange);
 		LocalDateTime from = periodRange.from().atStartOfDay();
@@ -171,7 +171,8 @@ public class EnergyService {
 		EnergyMeasurement latestMeasurement = energyMapper.findLatestPlantMeasurement(plantId, from, to).orElse(null);
 		PeakPowerTrendPoint latestInterval = trend.isEmpty() ? null : trend.get(trend.size() - 1);
 		PeakPowerTrendPoint peakInterval = maxPeakInterval(trend);
-		boolean todayDayView = periodRange.period() == PeakPowerPeriod.DAY && resolvedDate.equals(LocalDate.now(SERVICE_ZONE));
+		LocalDate today = LocalDate.now(SERVICE_ZONE);
+		boolean todayDayView = periodRange.period() == PeakPowerPeriod.DAY && resolvedDate.equals(today);
 		BigDecimal currentKw = todayDayView && latestMeasurement != null
 			? zeroIfNull(latestMeasurement.getPeakKw())
 			: peakInterval == null ? BigDecimal.ZERO : zeroIfNull(peakInterval.getMaxKw());
@@ -213,7 +214,7 @@ public class EnergyService {
 			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
 		}
 
-		LocalDate resolvedDate = targetDate == null ? LocalDate.now() : targetDate;
+		LocalDate resolvedDate = targetDate == null ? LocalDate.now(SERVICE_ZONE) : targetDate;
 		UtilityUsagePeriodRange periodRange = resolveUtilityUsagePeriodRange(resolvedDate, period);
 		UtilityUsagePeriodRange previousPeriodRange = previousUtilityUsagePeriodRange(periodRange);
 		LocalDateTime from = periodRange.from().atStartOfDay();
@@ -283,10 +284,10 @@ public class EnergyService {
 		LocalDate usageDate = targetDate == null
 			? energyMapper.findLatestFacilityLineSummaryDate(plantId, facilityType)
 				.or(() -> energyMapper.findLatestFacilityLineMeasurementDate(plantId, facilityType))
-				.orElse(LocalDate.now())
+				.orElse(LocalDate.now(SERVICE_ZONE))
 			: targetDate;
-		LocalDateTime usageTo = usageDate.equals(LocalDate.now())
-			? LocalDateTime.now()
+		LocalDateTime usageTo = usageDate.equals(LocalDate.now(SERVICE_ZONE))
+			? LocalDateTime.now(SERVICE_ZONE)
 			: usageDate.plusDays(1).atStartOfDay();
 
 		return energyMapper.findFacilityLineUsages(
@@ -311,7 +312,7 @@ public class EnergyService {
 		LocalDate to
 	) {
 		EnergyType resolvedEnergyType = energyType == null ? EnergyType.ELECTRICITY : energyType;
-		LocalDate resolvedTo = to == null ? LocalDate.now() : to;
+		LocalDate resolvedTo = to == null ? LocalDate.now(SERVICE_ZONE) : to;
 		LocalDate resolvedFrom = from == null ? resolvedTo.minusDays(6) : from;
 		if (resolvedFrom.isAfter(resolvedTo)) {
 			LocalDate previousFrom = resolvedFrom;
