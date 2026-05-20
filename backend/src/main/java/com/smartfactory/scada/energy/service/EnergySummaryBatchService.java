@@ -3,6 +3,7 @@ package com.smartfactory.scada.energy.service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.ZoneId;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -19,22 +20,24 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class EnergySummaryBatchService {
 
+	private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
+
 	private final EnergyMapper energyMapper;
 
-	@Scheduled(cron = "${energy.summary.daily-cron:0 10 0 * * *}")
+	@Scheduled(cron = "${energy.summary.daily-cron:0 10 0 * * *}", zone = "Asia/Seoul")
 	public void createYesterdayDailySummaries() {
-		createDailySummaries(LocalDate.now().minusDays(1));
+		createDailySummaries(LocalDate.now(SERVICE_ZONE).minusDays(1));
 	}
 
-	@Scheduled(cron = "${energy.summary.hourly-cron:0 5 * * * *}")
+	@Scheduled(cron = "${energy.summary.hourly-cron:0 5 * * * *}", zone = "Asia/Seoul")
 	public void createPreviousHourSummaries() {
-		LocalDateTime previousHour = LocalDateTime.now().minusHours(1).withMinute(0).withSecond(0).withNano(0);
+		LocalDateTime previousHour = LocalDateTime.now(SERVICE_ZONE).minusHours(1).withMinute(0).withSecond(0).withNano(0);
 		createHourlySummaries(previousHour);
 	}
 
-	@Scheduled(cron = "${energy.summary.monthly-cron:0 30 0 1 * *}")
+	@Scheduled(cron = "${energy.summary.monthly-cron:0 30 0 1 * *}", zone = "Asia/Seoul")
 	public void createPreviousMonthSummaries() {
-		createMonthlySummaries(YearMonth.now().minusMonths(1));
+		createMonthlySummaries(YearMonth.now(SERVICE_ZONE).minusMonths(1));
 	}
 
 	@Transactional
