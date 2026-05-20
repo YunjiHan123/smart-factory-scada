@@ -199,4 +199,5 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   deleteChatbotMessage: (messageId) => apiFetch(`/api/chatbot/messages/${messageId}`, { method: 'DELETE' }),
+  clearChatbotMessages: (plantId) => apiFetch(`/api/chatbot/messages${toQuery({ plantId })}`, { method: 'DELETE' }),
 }

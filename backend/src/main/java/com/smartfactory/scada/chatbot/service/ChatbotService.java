@@ -137,6 +137,18 @@ public class ChatbotService {
 		}
 	}
 
+	@Transactional
+	public void deleteMessagesByPlant(AuthenticatedUser authenticatedUser, Long plantId) {
+		if (authenticatedUser == null) {
+			throw new BusinessException(AuthErrorCode.AUTHENTICATION_REQUIRED);
+		}
+		if (plantId == null) {
+			throw new BusinessException(CommonErrorCode.VALIDATION_ERROR);
+		}
+
+		chatbotMapper.deleteByUserIdAndPlantId(authenticatedUser.userId(), plantId);
+	}
+
 	private String buildFallbackAnswer(String question, OperationalContext operationalContext) {
 		if (operationalContext.plantId() == null) {
 			return "\uc0ac\uc5c5\uc7a5\uc744 \uc120\ud0dd\ud558\uba74 \ucd5c\uadfc \uc5d0\ub108\uc9c0 \uc0ac\uc6a9\ub7c9, ESG \ub4f1\uae09, \uc54c\ub78c \uc815\ubcf4\ub97c \uae30\uc900\uc73c\ub85c \ub2f5\ubcc0\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.";
