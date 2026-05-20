@@ -174,14 +174,20 @@ SELECT
         4
     ) AS solar_kwh,
     ROUND(
-        (30.0 + f.plant_id * 1.85 + f.equipment_seq * 0.82)
+        (285.0 + f.plant_id * 7.5 + f.equipment_seq * 3.4)
         * CASE
-            WHEN HOUR(h.hour_at) BETWEEN 8 AND 18 THEN 1.18
-            WHEN HOUR(h.hour_at) BETWEEN 6 AND 7 THEN 0.82
-            WHEN HOUR(h.hour_at) BETWEEN 19 AND 21 THEN 0.72
-            ELSE 0.38
+            WHEN HOUR(h.hour_at) BETWEEN 8 AND 18 THEN
+                0.92 + SIN(((HOUR(h.hour_at) - 7) / 12.0) * PI()) * 0.18
+            WHEN HOUR(h.hour_at) BETWEEN 6 AND 7 THEN 0.74
+            WHEN HOUR(h.hour_at) BETWEEN 19 AND 21 THEN 0.68
+            ELSE 0.46
           END
-        * (1.18 + MOD(f.equipment_seq, 7) * 0.025),
+        * CASE
+            WHEN DAYOFWEEK(h.hour_at) IN (1, 7) THEN 0.91
+            ELSE 1.0
+          END
+        * (0.96 + MOD(DAYOFYEAR(h.hour_at) + f.plant_id * 3 + f.equipment_seq, 19) * 0.004)
+        * (0.98 + MOD(f.plant_id * 5 + f.equipment_seq * 3 + HOUR(h.hour_at), 11) * 0.006),
         4
     ) AS peak_kw
 FROM tmp_smwp_facilities f

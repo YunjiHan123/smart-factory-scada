@@ -311,8 +311,8 @@ const selectedFacilityLiveEnergy = computed(() => {
   }
   return liveEnergyByFacility.get(energyKey(selectedPlantId.value, selectedFacilityId.value)) || null
 })
-const selectedPlantLiveEnergy = computed(() => {
-  const plantId = Number(selectedPlantId.value)
+function plantLiveEnergy(plantIdValue) {
+  const plantId = Number(plantIdValue)
   if (!Number.isFinite(plantId)) {
     return null
   }
@@ -352,7 +352,9 @@ const selectedPlantLiveEnergy = computed(() => {
       peakKw: 0,
     },
   )
-})
+}
+
+const selectedPlantLiveEnergy = computed(() => plantLiveEnergy(selectedPlantId.value))
 const selectedPlantDailyLiveUsage = computed(() => {
   const plantId = Number(selectedPlantId.value)
   if (!Number.isFinite(plantId)) {
@@ -374,8 +376,8 @@ const selectedPlantDailyLiveUsage = computed(() => {
       { electricityKwh: 0, gasM3: 0, waterTon: 0, solarKwh: 0 },
     )
 })
-const selectedPlantRealtimeElapsedSeconds = computed(() => {
-  const plantId = Number(selectedPlantId.value)
+function plantRealtimeElapsedSeconds(plantIdValue) {
+  const plantId = Number(plantIdValue)
   if (!Number.isFinite(plantId)) {
     return 0
   }
@@ -389,7 +391,9 @@ const selectedPlantRealtimeElapsedSeconds = computed(() => {
   }
 
   return Math.max(0, (realtimeNow.value - Math.max(...seenAtValues)) / 1000)
-})
+}
+
+const selectedPlantRealtimeElapsedSeconds = computed(() => plantRealtimeElapsedSeconds(selectedPlantId.value))
 const selectedLiveEnergy = computed(() =>
   selectedFacilityId.value ? selectedFacilityLiveEnergy.value : selectedPlantLiveEnergy.value,
 )
@@ -575,6 +579,34 @@ function estimatedRealtimeUsage(facility, live) {
     }
   }
   return elapsedSeconds * rate
+}
+
+function estimatedRealtimePeakKw(live, plantIdValue = selectedPlantId.value) {
+  if (!live || selectedPeakPeriod.value !== 'DAY' || !selectedPeakDateIsToday.value) {
+    return 0
+  }
+
+  const basePeakKw = metricNumber(live, 'peakKw', 'peak_kw')
+  if (basePeakKw <= 0) {
+    return 0
+  }
+
+  const elapsedSeconds = plantRealtimeElapsedSeconds(plantIdValue)
+  if (elapsedSeconds <= 0) {
+    return 0
+  }
+
+  const seed = Number(live.plantId || selectedPlantId.value || 1) * 17
+  const seconds = realtimeNow.value / 1000
+  const wave = Math.sin((seconds + seed) * 0.9) + Math.sin((seconds + seed) * 0.37) * 0.45
+  const drift = Math.min(elapsedSeconds * Math.max(basePeakKw * 0.00035, 2), basePeakKw * 0.06)
+  const jitter = wave * Math.max(basePeakKw * 0.004, 18)
+
+  return Math.max(-basePeakKw * 0.035, Math.min(basePeakKw * 0.08, drift + jitter))
+}
+
+function realtimePeakKw(live, plantIdValue = selectedPlantId.value) {
+  return Math.max(0, metricNumber(live, 'peakKw', 'peak_kw') + estimatedRealtimePeakKw(live, plantIdValue))
 }
 
 function energyMetricKeys(energyType) {
@@ -1352,7 +1384,7 @@ const peakMetrics = computed(() => {
     return metrics
   }
 
-  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const currentKw = realtimePeakKw(live, selectedPlantId.value)
   const thresholdKw = Number(metrics.thresholdKw || PLANT_PEAK_THRESHOLD_KW)
   const currentIntervalAt = live.measuredAt
  return {
@@ -1377,7 +1409,7 @@ const peakTrend = computed(() => {
     return rows
   }
 
-  const currentKw = metricNumber(live, 'peakKw', 'peak_kw')
+  const currentKw = realtimePeakKw(live, selectedPlantId.value)
   const index = rows.findIndex((point) => formatHourBucketInput(point.measuredAt || point.measured_at) === measuredAt)
   const livePoint = {
     ...(index >= 0 ? rows[index] : {}),
@@ -1422,10 +1454,12 @@ const selectedPeakPlantComparison = computed(() =>
 const peakComparisonRows = computed(() =>
   peakPlantComparison.value
     .map((plant, index) => {
-      const active = Number(plant.plantId || plant.plant_id) === Number(selectedPlantId.value)
-      const livePeakKw = selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value && active
-        ? Number(peakMetrics.value.currentKw || 0)
-        : 0
+      const plantId = Number(plant.plantId || plant.plant_id)
+      const active = plantId === Number(selectedPlantId.value)
+      const livePlant = selectedPeakPeriod.value === 'DAY' && selectedPeakDateIsToday.value
+        ? plantLiveEnergy(plantId)
+        : null
+      const livePeakKw = livePlant ? realtimePeakKw(livePlant, plantId) : 0
       const peakKw = livePeakKw > 0 ? livePeakKw : Number(plant.periodPeakKw || plant.period_peak_kw || 0)
       const thresholdKw = Number(plant.thresholdKw || plant.threshold_kw || 0)
       return {
