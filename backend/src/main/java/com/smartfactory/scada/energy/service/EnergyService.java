@@ -80,6 +80,7 @@ public class EnergyService {
 		measurement.setPlantId(message.getPlantId());
 		measurement.setFacilityId(message.getFacilityId());
 		measurement.setMeasuredAt(toLocalDateTime(message));
+		measurement.setCreatedAt(LocalDateTime.now(SERVICE_ZONE));
 		measurement.setElectricityKwh(toBigDecimal(message.getElectricityKwh()));
 		measurement.setGasM3(toBigDecimal(message.getGasM3()));
 		measurement.setWaterTon(toBigDecimal(message.getWaterTon()));
@@ -727,9 +728,6 @@ public class EnergyService {
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {
-		if (message.getMeasuredAt() == null) {
-			return LocalDateTime.now(SERVICE_ZONE);
-		}
-		return LocalDateTime.ofInstant(message.getMeasuredAt(), SERVICE_ZONE);
+		return LocalDateTime.now(SERVICE_ZONE);
 	}
 }
