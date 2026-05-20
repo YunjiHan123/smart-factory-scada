@@ -186,7 +186,7 @@ public class SmwpEnergyService {
 		LocalDate date,
 		SmwpDailyEnergyUsage usage
 	) {
-		if (usage.getLatestMeasuredAt() != null || date.equals(LocalDate.now(SERVICE_ZONE))) {
+		if (usage.getLatestMeasuredAt() != null && !isZeroUsage(usage)) {
 			return usage;
 		}
 
@@ -208,6 +208,13 @@ public class SmwpEnergyService {
 		usage.setSolarKwh(zeroIfNull(summary.getSolarKwh()));
 		usage.setLatestMeasuredAt(summary.getSummaryAt());
 		return usage;
+	}
+
+	private boolean isZeroUsage(SmwpDailyEnergyUsage usage) {
+		return zeroIfNull(usage.getElectricityKwh()).compareTo(BigDecimal.ZERO) == 0
+			&& zeroIfNull(usage.getGasM3()).compareTo(BigDecimal.ZERO) == 0
+			&& zeroIfNull(usage.getWaterTon()).compareTo(BigDecimal.ZERO) == 0
+			&& zeroIfNull(usage.getSolarKwh()).compareTo(BigDecimal.ZERO) == 0;
 	}
 
 	private BigDecimal zeroIfNull(BigDecimal value) {
