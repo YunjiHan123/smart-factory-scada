@@ -633,7 +633,6 @@ public class EnergyService {
 			"용수 사용량이 급증했습니다."
 		);
 
-		createMeterReverseAlarm(current, previous);
 	}
 
 	private void createPeakAlarm(EnergyMeasurement current) {
@@ -676,23 +675,6 @@ public class EnergyService {
 			delta,
 			threshold,
 			String.format("%s %s 증가량: %s %s", facilityLabel(current.getFacilityId()), message, delta, unit)
-		);
-	}
-
-	private void createMeterReverseAlarm(EnergyMeasurement current, EnergyMeasurement previous) {
-		if (!isReversed(current.getElectricityKwh(), previous.getElectricityKwh())
-			&& !isReversed(current.getGasM3(), previous.getGasM3())
-			&& !isReversed(current.getWaterTon(), previous.getWaterTon())) {
-			return;
-		}
-
-		createAlarmIfNotRecent(
-			current,
-			AlarmType.FACILITY,
-			AlarmLevel.WARNING,
-			BigDecimal.ZERO,
-			BigDecimal.ZERO,
-			String.format("%s 누적 계측값이 직전 수집값보다 감소했습니다. 계측기 리셋 또는 이상 여부를 확인하세요.", facilityLabel(current.getFacilityId()))
 		);
 	}
 
@@ -741,10 +723,6 @@ public class EnergyService {
 			return BigDecimal.ZERO;
 		}
 		return currentValue.subtract(previousValue);
-	}
-
-	private boolean isReversed(BigDecimal current, BigDecimal previous) {
-		return current != null && previous != null && current.compareTo(previous) < 0;
 	}
 
 	private LocalDateTime toLocalDateTime(EnergyMeasurementMessage message) {

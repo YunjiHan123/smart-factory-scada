@@ -21,6 +21,8 @@ import com.smartfactory.scada.energy.dto.UtilityMeterStatus;
 import com.smartfactory.scada.energy.dto.UtilityUsagePattern;
 import com.smartfactory.scada.energy.dto.UtilityUsagePlantComparison;
 import com.smartfactory.scada.facility.domain.FacilityType;
+import com.smartfactory.scada.smwp.dto.SmwpDailyEnergyUsage;
+import com.smartfactory.scada.smwp.dto.SmwpHourlyEnergyPoint;
 
 @Mapper
 public interface EnergyMapper {
@@ -203,6 +205,24 @@ public interface EnergyMapper {
 	);
 
 	List<UtilityUsagePlantComparison> findUtilityPlantComparison(
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	Optional<SmwpDailyEnergyUsage> findSmwpDailyEnergy(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<SmwpHourlyEnergyPoint> findSmwpHourlyEnergy(
+		@Param("plantId") Long plantId,
+		@Param("from") LocalDateTime from,
+		@Param("to") LocalDateTime to
+	);
+
+	List<SmwpHourlyEnergyPoint> findSmwpHourlyEnergyFromMeasurements(
+		@Param("plantId") Long plantId,
 		@Param("from") LocalDateTime from,
 		@Param("to") LocalDateTime to
 	);

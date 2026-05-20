@@ -54,6 +54,7 @@ public class SecurityConfig {
 					"/actuator/info",
 					"/webjars/**",
 					"/ws/**",
+					"/api/smwp/**",
 					"/favicon.ico",
 					"/error"
 				).permitAll()

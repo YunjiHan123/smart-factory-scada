@@ -115,6 +115,23 @@
         <result property="latestMeasuredAt" column="latest_measured_at"/>
     </resultMap>
 
+    <resultMap id="SmwpDailyEnergyUsageResultMap" type="com.smartfactory.scada.smwp.dto.SmwpDailyEnergyUsage">
+        <result property="plantId" column="plant_id"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+        <result property="latestMeasuredAt" column="latest_measured_at"/>
+    </resultMap>
+
+    <resultMap id="SmwpHourlyEnergyPointResultMap" type="com.smartfactory.scada.smwp.dto.SmwpHourlyEnergyPoint">
+        <result property="hour" column="usage_hour"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+    </resultMap>
+
     <insert id="insertMeasurement" parameterType="com.smartfactory.scada.energy.domain.EnergyMeasurement" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO energy_measurements (
             plant_id,
@@ -1453,5 +1470,112 @@
             ) AS water_usage_rate
         FROM daily_usage
         ORDER BY usage_date ASC
+    </select>
+
+    <select id="findSmwpDailyEnergy" resultMap="SmwpDailyEnergyUsageResultMap">
+        SELECT
+            #{plantId} AS plant_id,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.electricity_kwh &gt;= first.electricity_kwh THEN latest.electricity_kwh - first.electricity_kwh
+                    ELSE 0
+                END
+            ), 0), 2) AS electricity_kwh,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.gas_m3 &gt;= first.gas_m3 THEN latest.gas_m3 - first.gas_m3
+                    ELSE 0
+                END
+            ), 0), 2) AS gas_m3,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.water_ton &gt;= first.water_ton THEN latest.water_ton - first.water_ton
+                    ELSE 0
+                END
+            ), 0), 2) AS water_ton,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.solar_kwh &gt;= first.solar_kwh THEN latest.solar_kwh - first.solar_kwh
+                    ELSE 0
+                END
+            ), 0), 2) AS solar_kwh,
+            MAX(latest.measured_at) AS latest_measured_at
+        FROM (
+            SELECT
+                facility_id,
+                MIN(id) AS first_id,
+                MAX(id) AS latest_id
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+            GROUP BY facility_id
+        ) points
+        JOIN energy_measurements first ON first.id = points.first_id
+        JOIN energy_measurements latest ON latest.id = points.latest_id
+    </select>
+
+    <select id="findSmwpHourlyEnergy" resultMap="SmwpHourlyEnergyPointResultMap">
+        SELECT
+            HOUR(summary_at) AS usage_hour,
+            ROUND(COALESCE(SUM(electricity_kwh), 0), 2) AS electricity_kwh,
+            ROUND(COALESCE(SUM(gas_m3), 0), 2) AS gas_m3,
+            ROUND(COALESCE(SUM(water_ton), 0), 2) AS water_ton,
+            ROUND(COALESCE(SUM(solar_kwh), 0), 2) AS solar_kwh
+        FROM energy_summaries
+        WHERE plant_id = #{plantId}
+          AND facility_id IS NULL
+          AND summary_type = 'HOURLY'
+          AND summary_at &gt;= #{from}
+          AND summary_at &lt; #{to}
+        GROUP BY HOUR(summary_at)
+        ORDER BY usage_hour ASC
+    </select>
+
+    <select id="findSmwpHourlyEnergyFromMeasurements" resultMap="SmwpHourlyEnergyPointResultMap">
+        SELECT
+            points.usage_hour,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.electricity_kwh &gt;= first.electricity_kwh THEN latest.electricity_kwh - first.electricity_kwh
+                    ELSE 0
+                END
+            ), 0), 2) AS electricity_kwh,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.gas_m3 &gt;= first.gas_m3 THEN latest.gas_m3 - first.gas_m3
+                    ELSE 0
+                END
+            ), 0), 2) AS gas_m3,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.water_ton &gt;= first.water_ton THEN latest.water_ton - first.water_ton
+                    ELSE 0
+                END
+            ), 0), 2) AS water_ton,
+            ROUND(COALESCE(SUM(
+                CASE
+                    WHEN latest.solar_kwh &gt;= first.solar_kwh THEN latest.solar_kwh - first.solar_kwh
+                    ELSE 0
+                END
+            ), 0), 2) AS solar_kwh
+        FROM (
+            SELECT
+                facility_id,
+                HOUR(measured_at) AS usage_hour,
+                MIN(id) AS first_id,
+                MAX(id) AS latest_id
+            FROM energy_measurements
+            WHERE plant_id = #{plantId}
+              AND measured_at &gt;= #{from}
+              AND measured_at &lt; #{to}
+              AND facility_id BETWEEN (#{plantId} * 10000 + 1) AND (#{plantId} * 10000 + 24)
+            GROUP BY facility_id, HOUR(measured_at)
+        ) points
+        JOIN energy_measurements first ON first.id = points.first_id
+        JOIN energy_measurements latest ON latest.id = points.latest_id
+        GROUP BY points.usage_hour
+        ORDER BY points.usage_hour ASC
     </select>
 </mapper>
