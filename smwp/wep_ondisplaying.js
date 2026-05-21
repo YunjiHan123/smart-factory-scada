@@ -40,11 +40,9 @@ if (!window.SMWP_DISPLAYING_READY) {
     var SMWP_HOURLY_CHART = null;
     var SMWP_HOURLY_TIMER = null;
     var SMWP_HOURLY_REQUEST_RUNNING = false;
-    var SMWP_HOURLY_API_DATA = null;
 
     var SMWP_COMPARE_TIMER = null;
     var SMWP_COMPARE_REQUEST_RUNNING = false;
-    var SMWP_COMPARE_API_DATA = {};
 
     var SMWP_REFRESH_MS = 1000;
 
@@ -123,22 +121,6 @@ if (!window.SMWP_DISPLAYING_READY) {
             + '?plantName=' + encodeURIComponent(smwpDisplayPlantName())
             + '&date=' + encodeURIComponent(dateText)
             + '&_t=' + new Date().getTime();
-    }
-
-    function smwpApplyLiveHourlyIfReady(data, dateText) {
-        if (typeof window.SMWPApplyLiveHourly === 'function') {
-            return window.SMWPApplyLiveHourly(data, dateText);
-        }
-
-        return data;
-    }
-
-    function smwpApplyLiveCompareIfReady(data, energyType, dateText) {
-        if (typeof window.SMWPApplyLiveCompare === 'function') {
-            return window.SMWPApplyLiveCompare(data, energyType, dateText);
-        }
-
-        return data;
     }
 
     function smwpHourlyArray(values, dateText) {
@@ -245,17 +227,6 @@ if (!window.SMWP_DISPLAYING_READY) {
         };
     }
 
-    function smwpRenderEnergyChart(dateText) {
-        if (!SMWP_HOURLY_CHART || !SMWP_HOURLY_API_DATA) {
-            return;
-        }
-
-        SMWP_HOURLY_CHART.setOption(
-            smwpHourlyOption(smwpApplyLiveHourlyIfReady(SMWP_HOURLY_API_DATA, dateText), dateText),
-            true
-        );
-    }
-
     function smwpRefreshEnergyChart(dateText) {
         if (SMWP_HOURLY_REQUEST_RUNNING) {
             return;
@@ -278,8 +249,7 @@ if (!window.SMWP_DISPLAYING_READY) {
                 return response.json();
             })
             .then(function (data) {
-                SMWP_HOURLY_API_DATA = data;
-                smwpRenderEnergyChart(dateText);
+                SMWP_HOURLY_CHART.setOption(smwpHourlyOption(data, dateText), true);
             })
             .catch(function (error) {
                 console.error('[SMWP Hourly] API error:', error);
@@ -409,28 +379,6 @@ if (!window.SMWP_DISPLAYING_READY) {
         };
     }
 
-    function smwpRenderCompareChart(config, dateText) {
-        var chart = smwpFindChartInstance(config.domId);
-
-        if (!chart) {
-            return;
-        }
-
-        var data = SMWP_COMPARE_API_DATA[config.energyType];
-
-        if (!data) {
-            return;
-        }
-
-        chart.setOption(
-            smwpCompareOption(
-                config,
-                smwpApplyLiveCompareIfReady(data, config.energyType, dateText)
-            ),
-            true
-        );
-    }
-
     function smwpRefreshCompareChartOne(config, dateText) {
         var chart = smwpFindChartInstance(config.domId);
 
@@ -447,8 +395,7 @@ if (!window.SMWP_DISPLAYING_READY) {
                 return response.json();
             })
             .then(function (data) {
-                SMWP_COMPARE_API_DATA[config.energyType] = data;
-                smwpRenderCompareChart(config, dateText);
+                chart.setOption(smwpCompareOption(config, data), true);
             })
             .catch(function (error) {
                 console.error('[SMWP Compare] API error:', error);
@@ -471,20 +418,6 @@ if (!window.SMWP_DISPLAYING_READY) {
         }, 300);
     }
 
-    function smwpRenderLiveCharts() {
-        var dateText = window.SMWP_SELECTED_DATE || smwpDisplayTodayText();
-
-        if (!smwpDisplayIsToday(dateText)) {
-            return;
-        }
-
-        smwpRenderEnergyChart(dateText);
-
-        for (var i = 0; i < SMWP_COMPARE_CHARTS.length; i++) {
-            smwpRenderCompareChart(SMWP_COMPARE_CHARTS[i], dateText);
-        }
-    }
-
     function smwpStopAllChartRealtime() {
         if (SMWP_HOURLY_TIMER) {
             clearTimeout(SMWP_HOURLY_TIMER);
@@ -502,10 +435,6 @@ if (!window.SMWP_DISPLAYING_READY) {
 
         if (!smwpDisplayIsToday(dateText)) {
             return;
-        }
-
-        if (typeof window.SMWPStartEnergyWebSocket === 'function') {
-            window.SMWPStartEnergyWebSocket();
         }
 
         function hourlyLoop() {
@@ -550,16 +479,10 @@ if (!window.SMWP_DISPLAYING_READY) {
         smwpStartAllChartRealtime(window.SMWP_SELECTED_DATE);
     };
 
-    window.SMWPRenderLiveCharts = smwpRenderLiveCharts;
-
     $(document).ready(function () {
         var initDate =
             window.SMWP_SELECTED_DATE ||
             smwpDisplayTodayText();
-
-        if (typeof window.SMWPAddLiveEnergyListener === 'function') {
-            window.SMWPAddLiveEnergyListener(smwpRenderLiveCharts);
-        }
 
         setTimeout(function () {
             smwpRefreshEnergyChart(initDate);
