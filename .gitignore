@@ -1,0 +1,23 @@
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+.vs/
+
+### VS Code ###
+.vscode/
+
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Codex local files ###
+.codex/
+agent.md
+AGENTS.md
+
+### Local environment ###
+backend/.env
+frontend/.env
+frontend/.env.local

@@ -1,0 +1,9 @@
+-- Dashboard queries now read period statistics from energy_summaries first.
+-- No index is created in this migration because large hosted MySQL instances can
+-- exceed client timeouts while building secondary indexes online.
+--
+-- Optional production tuning, run manually during a maintenance window if needed:
+-- CREATE INDEX idx_summaries_type_time_plant_facility
+--     ON energy_summaries (summary_type, summary_at, plant_id, facility_id);
+-- CREATE INDEX idx_summaries_type_plant_time_facility
+--     ON energy_summaries (summary_type, plant_id, summary_at, facility_id);

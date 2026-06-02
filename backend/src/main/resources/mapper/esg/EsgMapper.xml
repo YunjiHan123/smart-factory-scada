@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.smartfactory.scada.esg.mapper.EsgMapper">
+    <resultMap id="EsgScoreResultMap" type="com.smartfactory.scada.esg.domain.EsgScore">
+        <id property="id" column="id"/>
+        <result property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="targetMonth" column="target_month"/>
+        <result property="electricityScore" column="electricity_score"/>
+        <result property="gasScore" column="gas_score"/>
+        <result property="waterScore" column="water_score"/>
+        <result property="solarScore" column="solar_score"/>
+        <result property="peakScore" column="peak_score"/>
+        <result property="carbonScore" column="carbon_score"/>
+        <result property="totalScore" column="total_score"/>
+        <result property="grade" column="grade"/>
+    </resultMap>
+
+    <resultMap id="EsgEnergyAggregateResultMap" type="com.smartfactory.scada.esg.domain.EsgEnergyAggregate">
+        <id property="plantId" column="plant_id"/>
+        <result property="plantName" column="plant_name"/>
+        <result property="latitude" column="latitude"/>
+        <result property="longitude" column="longitude"/>
+        <result property="facilityCount" column="facility_count"/>
+        <result property="measurementCount" column="measurement_count"/>
+        <result property="latestMeasuredAt" column="latest_measured_at"/>
+        <result property="electricityKwh" column="electricity_kwh"/>
+        <result property="gasM3" column="gas_m3"/>
+        <result property="waterTon" column="water_ton"/>
+        <result property="solarKwh" column="solar_kwh"/>
+        <result property="currentPeakKw" column="current_peak_kw"/>
+        <result property="maxPeakKw" column="max_peak_kw"/>
+        <result property="intervalMaxPeakKw" column="interval_max_peak_kw"/>
+    </resultMap>
+
+    <select id="findScores" resultMap="EsgScoreResultMap">
+        SELECT
+            es.id,
+            es.plant_id,
+            p.name AS plant_name,
+            es.target_month,
+            es.electricity_score,
+            es.gas_score,
+            es.water_score,
+            es.solar_score,
+            es.peak_score,
+            es.carbon_score,
+            es.total_score,
+            es.grade
+        FROM esg_scores es
+        JOIN plants p ON p.id = es.plant_id
+        <where>
+            <if test="targetMonth != null">AND es.target_month = #{targetMonth}</if>
+        </where>
+        ORDER BY es.target_month DESC, es.total_score DESC, es.id DESC
+    </select>
+
+    <select id="findLatestByPlantId" resultMap="EsgScoreResultMap">
+        SELECT
+            es.id,
+            es.plant_id,
+            p.name AS plant_name,
+            es.target_month,
+            es.electricity_score,
+            es.gas_score,
+            es.water_score,
+            es.solar_score,
+            es.peak_score,
+            es.carbon_score,
+            es.total_score,
+            es.grade
+        FROM esg_scores es
+        JOIN plants p ON p.id = es.plant_id
+        WHERE es.plant_id = #{plantId}
+        ORDER BY es.target_month DESC, es.id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findEnvironmentAggregates" resultMap="EsgEnergyAggregateResultMap">
+        WITH usage_by_plant AS (
+            SELECT
+                es.plant_id,
+                COUNT(*) AS measurement_count,
+                MAX(es.summary_at) AS latest_measured_at,
+                ROUND(COALESCE(SUM(electricity_kwh), 0), 2) AS electricity_kwh,
+                ROUND(COALESCE(SUM(gas_m3), 0), 2) AS gas_m3,
+                ROUND(COALESCE(SUM(water_ton), 0), 2) AS water_ton,
+                ROUND(COALESCE(SUM(solar_kwh), 0), 2) AS solar_kwh,
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS max_peak_kw,
+                ROUND(COALESCE(MAX(peak_kw), 0), 2) AS interval_max_peak_kw
+            FROM energy_summaries es
+            WHERE es.summary_type = 'DAILY'
+              AND es.facility_id IS NULL
+              AND es.summary_at &gt;= #{from}
+              AND es.summary_at &lt; #{to}
+              <if test="plantId != null">AND es.plant_id = #{plantId}</if>
+            GROUP BY es.plant_id
+        ),
+        latest_summary AS (
+            SELECT es.plant_id, es.peak_kw AS current_peak_kw
+            FROM energy_summaries es
+            JOIN (
+                SELECT plant_id, MAX(summary_at) AS summary_at
+                FROM energy_summaries
+                WHERE summary_type = 'DAILY'
+                  AND facility_id IS NULL
+                  AND summary_at &gt;= #{from}
+                  AND summary_at &lt; #{to}
+                  <if test="plantId != null">AND plant_id = #{plantId}</if>
+                GROUP BY plant_id
+            ) latest
+              ON latest.plant_id = es.plant_id
+             AND latest.summary_at = es.summary_at
+            WHERE es.summary_type = 'DAILY'
+              AND es.facility_id IS NULL
+        ),
+        facility_counts AS (
+            SELECT plant_id, COUNT(*) AS facility_count
+            FROM facilities
+            GROUP BY plant_id
+        )
+        SELECT
+            p.id AS plant_id,
+            p.name AS plant_name,
+            p.latitude,
+            p.longitude,
+            COALESCE(fc.facility_count, 0) AS facility_count,
+            COALESCE(ubp.measurement_count, 0) AS measurement_count,
+            ubp.latest_measured_at,
+            COALESCE(ubp.electricity_kwh, 0) AS electricity_kwh,
+            COALESCE(ubp.gas_m3, 0) AS gas_m3,
+            COALESCE(ubp.water_ton, 0) AS water_ton,
+            COALESCE(ubp.solar_kwh, 0) AS solar_kwh,
+            COALESCE(ls.current_peak_kw, 0) AS current_peak_kw,
+            COALESCE(ubp.max_peak_kw, 0) AS max_peak_kw,
+            COALESCE(ubp.interval_max_peak_kw, 0) AS interval_max_peak_kw
+        FROM plants p
+        LEFT JOIN facility_counts fc ON fc.plant_id = p.id
+        LEFT JOIN usage_by_plant ubp ON ubp.plant_id = p.id
+        LEFT JOIN latest_summary ls ON ls.plant_id = p.id
+        <where>
+            <if test="plantId != null">AND p.id = #{plantId}</if>
+        </where>
+        ORDER BY p.name ASC
+    </select>
+</mapper>

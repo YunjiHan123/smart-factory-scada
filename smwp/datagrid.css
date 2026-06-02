@@ -1,0 +1,50 @@
+#domId .datagrid,
+#domId .datagrid-wrap,
+#domId .datagrid-view,
+#domId .datagrid-view1,
+#domId .datagrid-view2,
+#domId .datagrid-body,
+#domId .datagrid-body table {
+    background: #071827;
+}
+
+#domId .datagrid-header,
+#domId .datagrid-header-inner,
+#domId .datagrid-header table,
+#domId .datagrid-header tr,
+#domId .datagrid-header td {
+    background: #071827;
+}
+
+#domId .datagrid-header .datagrid-cell,
+#domId .datagrid-header .datagrid-cell span {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+#domId .datagrid-body tr:nth-child(even) td,
+#domId .datagrid-body tr:nth-child(odd) td {
+    background-color: #071827;
+    color: #ffffff;
+    font-size: 16px;
+}
+
+#domId .datagrid-body .datagrid-cell {
+    color: #ffffff;
+    font-size: 16px;
+}
+
+#domId .datagrid-body {
+    background-color: #071827;
+}
+
+#domId .datagrid-row-over td {
+    background: #0b2236 !important;
+    color: #ffffff;
+}
+
+#domId .datagrid-row-selected td {
+    background: #102f4a !important;
+    color: #ffffff;
+}

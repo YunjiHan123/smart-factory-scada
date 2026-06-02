@@ -1,0 +1,162 @@
+package com.smartfactory.scada.user.controller;
+
+import org.springframework.http.MediaType;
+
+import com.smartfactory.scada.auth.security.AuthenticatedUser;
+import com.smartfactory.scada.user.domain.UserRole;
+import com.smartfactory.scada.user.domain.UserStatus;
+import com.smartfactory.scada.user.dto.CurrentUserResponse;
+import com.smartfactory.scada.user.dto.UserDetailResponse;
+import com.smartfactory.scada.user.dto.UserListResponse;
+import com.smartfactory.scada.user.dto.UserUpdateRequest;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+@Tag(name = "사용자 API", description = "현재 로그인한 사용자 정보와 사용자 관리 API")
+@SecurityRequirement(name = "bearerAuth")
+public interface UserControllerSpec {
+
+	@Operation(
+		summary = "내 정보 조회",
+		description = """
+			Authorization 헤더의 access token을 검증한 뒤 현재 로그인한 사용자 정보를 반환합니다.<br>
+			Swagger에서 테스트하려면 로그인 API로 받은 accessToken을 Authorize 버튼에 먼저 입력해주세요.<br>
+			INACTIVE 또는 LOCKED 상태의 사용자는 JWT가 유효하더라도 접근할 수 없습니다.
+			"""
+	)
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "내 정보 조회 성공",
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON_VALUE,
+				schema = @Schema(implementation = CurrentUserResponse.class)
+			)
+		),
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "비활성화 또는 잠긴 사용자", content = @Content)
+	})
+	CurrentUserResponse me(@Parameter(hidden = true) AuthenticatedUser authenticatedUser);
+
+	@Operation(
+		summary = "사용자 목록 조회",
+		description = """
+			사용자 관리 화면에서 사용자 목록을 페이지 단위로 조회합니다.<br>
+			ADMIN 또는 MANAGER 권한을 가진 사용자만 호출할 수 있습니다.<br>
+			keyword는 email, name, phone에 부분 검색으로 적용됩니다.<br>
+			page는 0부터 시작하고, size는 기본 20개 / 최대 100개로 제한됩니다.<br>
+			기본 정렬은 최근 등록순입니다. 정확히는 createdAt DESC, id DESC 순서입니다.
+			"""
+	)
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "사용자 목록 조회 성공",
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON_VALUE,
+				schema = @Schema(implementation = UserListResponse.class)
+			)
+		),
+		@ApiResponse(responseCode = "400", description = "요청값 검증 실패", content = @Content),
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "사용자 관리 권한 없음", content = @Content)
+	})
+	UserListResponse getUsers(
+		@Parameter(hidden = true)
+		AuthenticatedUser authenticatedUser,
+
+		@Parameter(description = "페이지 번호. 0부터 시작합니다.", example = "0")
+		Integer page,
+
+		@Parameter(description = "페이지 크기. 기본값은 20이고 최대 100입니다.", example = "20")
+		Integer size,
+
+		@Parameter(description = "email, name, phone 부분 검색어", example = "operator")
+		String keyword,
+
+		@Parameter(description = "사용자 권한 필터", example = "VIEWER")
+		UserRole role,
+
+		@Parameter(description = "사용자 상태 필터", example = "ACTIVE")
+		UserStatus status,
+
+		@Parameter(description = "사업장 ID 필터", example = "1")
+		Long plantId
+	);
+
+	@Operation(
+		summary = "사용자 정보 수정",
+		description = """
+			사용자 관리 화면에서 특정 사용자의 관리 정보를 부분 수정합니다.<br>
+			요청 body에 보낸 필드만 수정하고, 빠진 필드는 기존 값을 유지합니다.<br>
+			null로 보낸 필드도 v1에서는 기존 값을 유지하며, 필드를 비우는 기능은 제공하지 않습니다.<br>
+			수정 가능 필드는 name, phone, role, plantId, status, note입니다.<br>
+			MANAGER는 ADMIN 사용자를 수정할 수 없고, 다른 사용자를 ADMIN으로 승격할 수도 없습니다.
+			"""
+	)
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "사용자 정보 수정 성공",
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON_VALUE,
+				schema = @Schema(implementation = UserDetailResponse.class)
+			)
+		),
+		@ApiResponse(responseCode = "400", description = "요청값 검증 실패", content = @Content),
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "사용자 관리 권한 없음", content = @Content),
+		@ApiResponse(responseCode = "404", description = "사용자 없음", content = @Content)
+	})
+	UserDetailResponse updateUser(
+		@Parameter(hidden = true)
+		AuthenticatedUser authenticatedUser,
+
+		@Parameter(description = "수정할 사용자 ID", example = "1", required = true)
+		Long userId,
+
+		@RequestBody(
+			description = "수정할 사용자 관리 정보. null 또는 빠진 필드는 수정하지 않습니다.",
+			required = true,
+			content = @Content(schema = @Schema(implementation = UserUpdateRequest.class))
+		)
+		UserUpdateRequest request
+	);
+
+	@Operation(
+		summary = "사용자 상세 조회",
+		description = """
+			사용자 관리 화면에서 특정 사용자의 상세 정보를 조회합니다.<br>
+			ADMIN 또는 MANAGER 권한을 가진 사용자만 호출할 수 있습니다.<br>
+			본인 정보 조회가 필요하면 GET /api/users/me API를 사용해주세요.
+			"""
+	)
+	@ApiResponses({
+		@ApiResponse(
+			responseCode = "200",
+			description = "사용자 상세 조회 성공",
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON_VALUE,
+				schema = @Schema(implementation = UserDetailResponse.class)
+			)
+		),
+		@ApiResponse(responseCode = "401", description = "인증 정보 누락 또는 유효하지 않은 access token", content = @Content),
+		@ApiResponse(responseCode = "403", description = "사용자 관리 권한 없음", content = @Content),
+		@ApiResponse(responseCode = "404", description = "사용자 없음", content = @Content)
+	})
+	UserDetailResponse getUserDetail(
+		@Parameter(hidden = true)
+		AuthenticatedUser authenticatedUser,
+
+		@Parameter(description = "조회할 사용자 ID", example = "1", required = true)
+		Long userId
+	);
+}

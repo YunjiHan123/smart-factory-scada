@@ -1,0 +1,53 @@
+#domId .l-btn {
+
+    background: linear-gradient(
+        180deg,
+        #1b2633 0%,
+        #111a24 100%
+    );
+
+    border: 1px solid #2c4358;
+
+    border-radius: 8px;
+
+    box-shadow:
+        0 2px 8px rgba(0,0,0,0.35);
+
+    transition: all 0.2s ease;
+}
+
+
+#domId .l-btn:hover {
+
+    background: linear-gradient(
+        180deg,
+        #223346 0%,
+        #17232f 100%
+    );
+
+    border-color: #3b5a77;
+
+    box-shadow:
+        0 4px 12px rgba(0,0,0,0.45),
+        0 0 10px rgba(30,144,255,0.18);
+}
+
+
+#domId .l-btn:active {
+
+    background: #101820;
+}
+
+
+#domId .l-btn-text {
+
+    font-size: 15px;
+
+    color: #dce8f5;
+
+    line-height: 20px;
+
+    font-weight: bold;
+
+    letter-spacing: 1px;
+}
